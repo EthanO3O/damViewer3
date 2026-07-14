@@ -2,6 +2,14 @@
 
 基于 `字段定义.js` 的状态字段与事件接口说明。通过 `engine.event.emit` 修改状态，通过 `proxy.watch` / `event.watch` 监听变化。
 
+## ChangeLog
+
+### 2026-07-14
+
+- 新增 VIEWER 字段 `dualMeshName`：启用/关闭双 msh 加载（非空进入 dual 并同步 `meshName`；`null`/`""` 关闭后按 normal 重载）
+- `getAllActorState(viewerId, 'dualMesh')` / `actor:state` 的 `type:'dualMesh'` 已接入
+- 补充双 msh 开关与 Actor 读写示例
+
 ---
 
 ## 目录
@@ -13,6 +21,7 @@
   - [VIEWER](#viewer)
   - [ACTOR](#actor)
 - [预演相关说明](#预演相关说明-forecast--damfscenario)
+- [双 msh（dualMeshName）](#双-mshdualmeshname)
 - [Event 事件](#event-事件)
 - [监听绑定](#监听绑定)
 - [常用示例](#常用示例)
@@ -28,6 +37,7 @@ engine.getAllViewerState()                           // [proxy, proxy] Viewer �
 engine.getAllActorState(viewerId)                    // { [matId]: stateProxy }（仅 normal 材料）
 engine.getAllActorState(viewerId, 'measuring')       // { [name]: stateProxy }
 engine.getAllActorState(viewerId, 'eph')             // 切片 Eph 材料
+engine.getAllActorState(viewerId, 'dualMesh')        // 双 msh Actor（dualMeshName 已启用时）
 
 // 示例
 engine.getAllActorState(viewerId)[matId].edge
@@ -45,7 +55,7 @@ engine.getAllActorState(viewerId, 'measuring')['H01XH02'].show
 | `root:state` | 修改根状态 | payload 直接为字段 |
 | `viewer:state` | 修改单个 viewer | 需带 `viewerId` / `id` |
 | `viewer:global:state` | 多窗口同步修改 viewer | `id` 可选；不带则全部 |
-| `actor:state` | 修改单个 actor | 需 `viewerId` + `matId` / `actorid` |
+| `actor:state` | 修改单个 actor | 需 `viewerId` + `matId` / `actorid`；`type` 可选 `normal` / `eph` / `measuring` / `dualMesh` |
 | `actor:global:state` | 多窗口/单窗口全部 actor | `viewers`/`viewerId` 可选 |
 
 ```js
@@ -87,6 +97,7 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 | `AXIS_POSITION` | `axisPosition` | `left-top` / `right-top` / `left-bottom`（默认右下角） |
 | `AXIS_SIZE` | `axisSize` | 坐标轴尺寸，默认 `150` |
 | `MESH_NAME` | `meshName` | 网格名 |
+| `DUAL_MESH_NAME` | `dualMeshName` | 双 msh 网格名（单个 string）；非空进入 dual 并同步 `meshName`；`null`/`""` 关闭后按 normal 重载 |
 | `TARGET_ATTR` | `targetAttr` | 物理量名 |
 | `TARGET_ATTR_VERSION` | `targetAttrVersion` | 物理量版本（`damfScenario` 开启时不参与云图，走 damf 旁路） |
 | `TARGET_MESH_VERSION` | `targetMeshVersion` | 浇筑版本（damf 打开时自动对齐 `base_mesh_version`） |
@@ -152,6 +163,18 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 
 ---
 
+## 双 msh（dualMeshName）
+
+| 操作 | 行为 |
+|------|------|
+| `dualMeshName: "<mesh>"` | 进入双 msh；若与当前 `meshName` 不同会同步写入 `meshName` 并按 dual 加载 |
+| `dualMeshName: null` / `""` | 关闭 dual；**保持**当前 `meshName`，按 normal 重载 |
+| Actor 读写 | `getAllActorState(viewerId, 'dualMesh')`；`actor:state` 可带 `type:'dualMesh'` |
+
+第二层材质号相对原始材料号有偏移（`DUAL_MESH_MAT_OFFSET = 100000`），与后端 `DualMeshMaterialOffset` 一致。
+
+---
+
 ## Event 事件
 
 ### ROOT
@@ -186,7 +209,7 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 
 | 常量 | 事件名 | 说明 |
 |------|--------|------|
-| `STATE` | `actor:state` | 修改 actor；`type` 可选 `normal` / `eph` / `measuring`（`forecast` 待扩展） |
+| `STATE` | `actor:state` | 修改 actor；`type` 可选 `normal` / `eph` / `measuring` / `dualMesh`（`forecast` 待扩展） |
 | `DONE` | `actor:done` | 可订阅；`payload.kind` 可为 `normal` / `forecast` / …，forecast 时带 `scenarioId` |
 
 ### ACTOR_GLOBAL / VIEWER_GLOBAL
@@ -265,6 +288,31 @@ engine.event.emit("viewer:state", {
     targetAxis: 3,
     updateAttr: Math.random(),
   },
+})
+```
+
+### 双 msh dualMeshName
+
+```js
+// 进入 dual（若与当前 meshName 不同会同步切换）
+engine.event.emit("viewer:state", {
+  viewerId: "<viewerId>",
+  state: { dualMeshName: "pre_jingling" },
+})
+
+// 关闭 dual：保持 meshName，按 normal 重载
+engine.event.emit("viewer:state", {
+  viewerId: "<viewerId>",
+  state: { dualMeshName: null },
+})
+
+// 读写 dual Actor
+engine.getAllActorState(viewerId, "dualMesh")
+engine.event.emit("actor:state", {
+  viewerId,
+  matId: "1",
+  type: "dualMesh",
+  state: { show: false },
 })
 ```
 

@@ -1,338 +1,373 @@
-//状态
-let STATES = {
-    ROOT: {
-        // 🔹 初始化配置（网络请求后设置）
-        CONTAINER: 'container',               // HTMLElement 容器
-        LEGEND_VISIBLE: 'legendVisible', // 是否显示图例
-        SELECT_VIEWER_STATE: 'selectViewerState', // 当前选中的 viewer state
-        VCOUNT: 'vCount',         // 渲染器数量
-        LOCK_CAM: 'lockCam',      // 是否锁定相机联动
-        SPRITE_IMG: 'spriteImg',  // 标签贴图 base64/url
-        LEGEND_IMAGE: 'legendImage', // 图例图片 base64
-    },
-    VIEWER: {
-        ID: 'id',
-        CAMERA_MODE: "cameraMode",//{"perspective" 透视相机,"orthographic" 正交相机,
-        CAMERA_POS:"cameraPos",
-        CAMERA_LOOKAT:"cameraLookat",
-        CAMERA_LOOK_AT_FIT_RATIO: "cameraLookAtFitRatio",//相机视角与模型视角的距离倍率 默认0.6
-        AUTO_ROTATE:"autoRotate",
+# DamViewer Stream — State & Event API
 
-        RAY_MODE: "rayMode", // null|"" 关闭；"mesh" 体拾取；"cut" 切面拾取；"measuring" 测点拾取
-        AXIS_STYLE: "axisStyle", //gid / blender
-        AXIS_POSITION: "axisPosition",// left-top , right-top ,left-bottom  默认右下角
-        AXIS_SIZE: "axisSize", //默认150
+基于 `字段定义.js` 的状态字段与事件接口说明。通过 `engine.event.emit` 修改状态，通过 `proxy.watch` / `event.watch` 监听变化。
 
-        MESH_NAME :"meshName",
-        TARGET_ATTR:"targetAttr",//设置物理量名
-        TARGET_ATTR_VERSION:"targetAttrVersion", //设置物理量版本（damfScenario 开启时不参与云图，走 damf 旁路）
-        TARGET_MESH_VERSION:"targetMeshVersion", //设置浇筑版本（damf 打开时自动对齐 base_mesh_version）
-        TARGET_STEP:"targetStep", //设置物理量小步
-        TARGET_AXIS:"targetAxis", //设置选中的轴(x,y,z 等用下标 0/1/2)
-        UPDATE_ATTR:"updateAttr", //更新 target* 后触发云图刷新（必填触发项）
+---
 
-        ALL_MESH:"allMesh",  //文件名或空 全坝段线框
-        ALL_MESH_SHOW:"allMeshShow",  //显示隐藏全坝段线框(默认true)；viewer 级独立，各窗口可分别显隐
-        /** 全量 damb 低透明叠层（overlayMesh），不是 damf 增量预演 */
-        FORECAST:"forecast",
-        /** 增量预演 damf 场景 id（上传产物 {id}.damf / {id}.damfc）；空字符串 = 关闭 */
-        DAMF_SCENARIO:"damfScenario",
+## 目录
 
-        COLOR_PALETTE:"colorPalette", //色板图  base64
-        NUM_ARR:"numArr", //最大最小值显式数组  字符串数组 
-        MESH_VERSIONS:"meshVersions", //有多少个浇筑版本
-        MIN:"min", //当前显式内容的最大值
-        MAX:"max", //当前显式内容的最小值
-        LOCK_RANGE: "lockRange",//锁定最大最小值
-        PRELOAD:"preload",//预加载列表 []
+- [获取 Proxy](#获取-proxy)
+- [修改 State](#修改-state)
+- [State 字段](#state-字段)
+  - [ROOT](#root)
+  - [VIEWER](#viewer)
+  - [ACTOR](#actor)
+- [预演相关说明](#预演相关说明-forecast--damfscenario)
+- [Event 事件](#event-事件)
+- [监听绑定](#监听绑定)
+- [常用示例](#常用示例)
+- [默认配置](#默认配置)
 
-        HIGHLIGHT:"highLight", //高亮范围
-        ENABLEHIGHLIGHT:"enableHighLight",
-        /** 单元高亮：{ cellIds: number[] } */
-        CELL_HIGHLIGHT:"cellHighlight",
-        CUT:"cut", //random() = 按回车键 
-        SHOWCLIPPLANE:"showClipPlane",//bool 材质裁剪开关
-        SHOW_CLIP_PLANE_HELPER:"showClipPlaneHelper",//bool 仅裁剪辅助面显示
-        CLIP_PLANE_NORMAL:"clipPlaneNormal",//切片方向
-        CLIP_PLANE_CONSTANT:"clipPlaneConstant",//切片位置(-1000,1000)
-        GRID:"grid",//全局网格线开关(默认false)
-        OPACITY:"opacity",//viewer 级透明度 0–1，统一下发到各 actor
-        USE_DEFAULT_COLOR:"useDefaultColor",//viewer 级默认色，统一下发到各 actor
+---
 
-        /** 测点数据 Point[] 或 { config?, measuring:[] }；显隐/透明度走 actorManager(type=measuring) */
-        MEASURING:"measuring",
+## 获取 Proxy
 
-    },
-    ACTOR: {
-        EDGE: 'edge',         // 边框线 bool
-        GRID: 'grid',             // 网格线 bool
-        LIGHT: 'light',           // 发光 bool
-        OPACITY: 'opacity',       // 透明度 0.0 - 1.0
-        NAME: 'name',             // 名称 
-        DISPLAY_MODE: 'displayMode', // 显示模式（point|line|surface)
-        SHOW: 'show',             // 显示总开关 bool
-        DROP: 'drop',// 删除 actor
-        /** forecast 增量 Actor 专有：所属 damf scenario id（只读语义，由挂载写入） */
-        SCENARIO_ID: 'scenarioId',
+```js
+engine.getRootState()
+engine.getAllViewerState()                           // [proxy, proxy] Viewer 代理对象数组
+engine.getAllActorState(viewerId)                    // { [matId]: stateProxy }（仅 normal 材料）
+engine.getAllActorState(viewerId, 'measuring')       // { [name]: stateProxy }
+engine.getAllActorState(viewerId, 'eph')             // 切片 Eph 材料
 
-        USE_DEFAULT_COLOR: 'useDefaultColor', // 是否使用默认色 bool
+// 示例
+engine.getAllActorState(viewerId)[matId].edge
+engine.getAllActorState(viewerId, 'measuring')['H01XH02'].show
+```
 
-        DISP_COEF:"dispCoef",//变形系数
-        MAT_STYLE:"matStyle",//显示材料  值:normal|shader
+> **damfScenario 增量 forecast Actor**：与 normal 同结构 state（`show` / `grid` / `edge` / `opacity` …），目前未接入 `actor:state` 的 type 路由；需通过 `actorManager._forecast` 内部 Map 读写（后续可扩展 `type:'forecast'`）。
 
-        ISO_LINE_NUM:"isoLineNum", //等值线 分段数 0为关闭
-        ISO_LINE_WIDTH:"isoLineWidth", //等值线 线宽 默认1.5
+---
 
-        COLOR_STEP_NUM:"colorStepNum", //色阶显式数 默认 5
-        USE_COLOR_STEP:"usecolorStep", //是否启用色阶 bool
-        REMAINING:"remaining", //是否显示全坝未浇筑部分
-    },
+## 修改 State
+
+| 事件 | 用途 | 要点 |
+|------|------|------|
+| `root:state` | 修改根状态 | payload 直接为字段 |
+| `viewer:state` | 修改单个 viewer | 需带 `viewerId` / `id` |
+| `viewer:global:state` | 多窗口同步修改 viewer | `id` 可选；不带则全部 |
+| `actor:state` | 修改单个 actor | 需 `viewerId` + `matId` / `actorid` |
+| `actor:global:state` | 多窗口/单窗口全部 actor | `viewers`/`viewerId` 可选 |
+
+```js
+engine.event.emit(EVENTS.ROOT.STATE, { vCount: 1 })
+engine.event.emit("viewer:state", { id: '', state: { grid: false } })
+engine.event.emit("actor:state", { viewer: '', actorid: '', state: { edge: true } })
+engine.event.emit("viewer:global:state", { id: ['', ''], state: {} })
+engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: false } })
+```
+
+---
+
+## State 字段
+
+### ROOT
+
+| 常量 | 字段名 | 说明 |
+|------|--------|------|
+| `CONTAINER` | `container` | HTMLElement 容器 |
+| `LEGEND_VISIBLE` | `legendVisible` | 是否显示图例 |
+| `SELECT_VIEWER_STATE` | `selectViewerState` | 当前选中的 viewer state |
+| `VCOUNT` | `vCount` | 渲染器数量 |
+| `LOCK_CAM` | `lockCam` | 是否锁定相机联动 |
+| `SPRITE_IMG` | `spriteImg` | 标签贴图 base64 / url |
+| `LEGEND_IMAGE` | `legendImage` | 图例图片 base64 |
+
+### VIEWER
+
+| 常量 | 字段名 | 说明 |
+|------|--------|------|
+| `ID` | `id` | Viewer ID |
+| `CAMERA_MODE` | `cameraMode` | `"perspective"` 透视 / `"orthographic"` 正交 |
+| `CAMERA_POS` | `cameraPos` | 相机位置 |
+| `CAMERA_LOOKAT` | `cameraLookat` | 相机注视点 |
+| `CAMERA_LOOK_AT_FIT_RATIO` | `cameraLookAtFitRatio` | 相机视角与模型距离倍率，默认 `0.6` |
+| `AUTO_ROTATE` | `autoRotate` | 自动旋转 |
+| `RAY_MODE` | `rayMode` | `null\|""` 关闭；`"mesh"` 体拾取；`"cut"` 切面拾取；`"measuring"` 测点拾取 |
+| `AXIS_STYLE` | `axisStyle` | 坐标轴样式：`gid` / `blender` |
+| `AXIS_POSITION` | `axisPosition` | `left-top` / `right-top` / `left-bottom`（默认右下角） |
+| `AXIS_SIZE` | `axisSize` | 坐标轴尺寸，默认 `150` |
+| `MESH_NAME` | `meshName` | 网格名 |
+| `TARGET_ATTR` | `targetAttr` | 物理量名 |
+| `TARGET_ATTR_VERSION` | `targetAttrVersion` | 物理量版本（`damfScenario` 开启时不参与云图，走 damf 旁路） |
+| `TARGET_MESH_VERSION` | `targetMeshVersion` | 浇筑版本（damf 打开时自动对齐 `base_mesh_version`） |
+| `TARGET_STEP` | `targetStep` | 物理量小步 |
+| `TARGET_AXIS` | `targetAxis` | 选中轴下标 `0/1/2`（x/y/z） |
+| `UPDATE_ATTR` | `updateAttr` | 更新 `target*` 后触发云图刷新（**必填触发项**） |
+| `ALL_MESH` | `allMesh` | 全坝段线框文件名或空 |
+| `ALL_MESH_SHOW` | `allMeshShow` | 全坝段线框显隐（默认 `true`）；各窗口可分别控制 |
+| `FORECAST` | `forecast` | 全量 `.damb` 低透明叠层（overlayMesh），非 damf 增量预演 |
+| `DAMF_SCENARIO` | `damfScenario` | 增量预演 damf 场景 id；空字符串 = 关闭 |
+| `COLOR_PALETTE` | `colorPalette` | 色板图 base64 |
+| `NUM_ARR` | `numArr` | 最大最小值显式数组（字符串数组） |
+| `MESH_VERSIONS` | `meshVersions` | 浇筑版本列表 |
+| `MIN` | `min` | 当前显式内容最小值 |
+| `MAX` | `max` | 当前显式内容最大值 |
+| `LOCK_RANGE` | `lockRange` | 锁定最大最小值 |
+| `PRELOAD` | `preload` | 预加载列表 `[]` |
+| `HIGHLIGHT` | `highLight` | 高亮范围 |
+| `ENABLEHIGHLIGHT` | `enableHighLight` | 是否启用高亮 |
+| `CELL_HIGHLIGHT` | `cellHighlight` | 单元高亮：`{ cellIds: number[] }` |
+| `CUT` | `cut` | 切片触发（常用 `Math.random()` 或回车） |
+| `SHOWCLIPPLANE` | `showClipPlane` | 材质裁剪开关 `bool` |
+| `SHOW_CLIP_PLANE_HELPER` | `showClipPlaneHelper` | 仅显示裁剪辅助面 `bool` |
+| `CLIP_PLANE_NORMAL` | `clipPlaneNormal` | 切片方向 |
+| `CLIP_PLANE_CONSTANT` | `clipPlaneConstant` | 切片位置 `(-1000, 1000)` |
+| `GRID` | `grid` | 全局网格线开关（默认 `false`） |
+| `OPACITY` | `opacity` | viewer 级透明度 `0–1`，统一下发到各 actor |
+| `USE_DEFAULT_COLOR` | `useDefaultColor` | viewer 级默认色，统一下发到各 actor |
+| `MEASURING` | `measuring` | 测点数据 `Point[]` 或 `{ config?, measuring:[] }`；显隐/透明度走 `actorManager(type=measuring)` |
+
+### ACTOR
+
+| 常量 | 字段名 | 说明 |
+|------|--------|------|
+| `EDGE` | `edge` | 边框线 `bool` |
+| `GRID` | `grid` | 网格线 `bool` |
+| `LIGHT` | `light` | 发光 `bool` |
+| `OPACITY` | `opacity` | 透明度 `0.0 – 1.0` |
+| `NAME` | `name` | 名称 |
+| `DISPLAY_MODE` | `displayMode` | 显示模式：`point` / `line` / `surface` |
+| `SHOW` | `show` | 显示总开关 `bool` |
+| `DROP` | `drop` | 删除 actor |
+| `SCENARIO_ID` | `scenarioId` | forecast 增量 Actor 专有：所属 damf scenario id（只读，由挂载写入） |
+| `USE_DEFAULT_COLOR` | `useDefaultColor` | 是否使用默认色 `bool` |
+| `DISP_COEF` | `dispCoef` | 变形系数 |
+| `MAT_STYLE` | `matStyle` | 显示材料：`normal` / `shader` |
+| `ISO_LINE_NUM` | `isoLineNum` | 等值线分段数，`0` 为关闭 |
+| `ISO_LINE_WIDTH` | `isoLineWidth` | 等值线线宽，默认 `1.5` |
+| `COLOR_STEP_NUM` | `colorStepNum` | 色阶显式数，默认 `5` |
+| `USE_COLOR_STEP` | `usecolorStep` | 是否启用色阶 `bool` |
+| `REMAINING` | `remaining` | 是否显示全坝未浇筑部分 |
+
+---
+
+## 预演相关说明（forecast / damfScenario）
+
+| 字段 | 含义 |
+|------|------|
+| `forecast` | 全量 `.damb` 低透明叠层（overlayMesh），与主模型物理量版本无关，仅参考几何 |
+| `damfScenario` | 增量预演 id；加载 `{id}.damf` + 挂 forecast Actor。`normal` = DB 几何 + damf res 前段；`forecast` = damf 增量 mesh + damf res 后段。云图不看 `targetAttrVersion`；测点仍走 WS |
+
+**前置条件**：`meshName` 已加载且与 damf 内 `mesh_name` 一致；通常只需设置 `damfScenario`。
+
+---
+
+## Event 事件
+
+### ROOT
+
+| 常量 | 事件名 | 说明 |
+|------|--------|------|
+| `STATE` | `root:state` | 修改根状态 |
+
+### VIEWER
+
+| 常量 | 事件名 | 说明 |
+|------|--------|------|
+| `RESIZE` | `viewer:resize` | 重新计算 canvas 尺寸 |
+| `ID` | `viewer:id` | Viewer ID 相关 |
+| `CAMERAVIEWE` | `viewer:camera:view` | 切换 camera 位置 |
+| `CAMERASET` | `viewer:camera:set` | 设置相机 |
+| `STATE` | `viewer:state` | 修改单个 viewer state |
+| `RAY_CB` | `viewer:ray:cb` | 订阅：ray 模式返回数据 |
+| `RAY_ProLine` | `viewer:ray:processline` | 射线处理线 |
+| `SHOWMAX` | `viewer:show:max` | 显示 max 标签 |
+| `SHOWMIN` | `viewer:show:min` | 显示 min 标签 |
+| `CLEARMINMAX` | `viewer:clear:minmax` | 清空最值标签 |
+| `GETMAXTAS` | `viewer:max:tas` | 获取温度应力最大值 |
+| `SENDMAXTAS` | `viewer:max:res` | 温度应力最大值回调 |
+| `SHOWINTEGRAL` | `viewer:show:integral` | 显示积分 |
+| `HIDEINTEGRAL` | `viewer:hide:integral` | 隐藏积分 |
+| `INITDONE` | `viewer:init:done` | 初始化完成，可 `setMeshName` |
+| `ALL_MESH_DONE` | `viewer:allmesh:done` | 全坝段线框 `allMesh` 加载完成 |
+| `CLIP_POS_CB` | `viewer:clipPos:cb` | 订阅：剖切平面坐标位置回调 |
+
+### ACTOR
+
+| 常量 | 事件名 | 说明 |
+|------|--------|------|
+| `STATE` | `actor:state` | 修改 actor；`type` 可选 `normal` / `eph` / `measuring`（`forecast` 待扩展） |
+| `DONE` | `actor:done` | 可订阅；`payload.kind` 可为 `normal` / `forecast` / …，forecast 时带 `scenarioId` |
+
+### ACTOR_GLOBAL / VIEWER_GLOBAL
+
+| 常量 | 事件名 | 说明 |
+|------|--------|------|
+| `ACTOR_GLOBAL.STATE` | `actor:global:state` | 全局 actor 状态 |
+| `VIEWER_GLOBAL.RESIZE` | `viewer:global:resize` | 全局 resize |
+| `VIEWER_GLOBAL.ACTIVATE` | `viewer:global:activate` | 切换 viewer 时发送，带对象 id |
+| `VIEWER_GLOBAL.INDEX` | `viewer:global:index` | viewer 索引 |
+| `VIEWER_GLOBAL.STATE` | `viewer:global:state` | 全局 viewer 状态 |
+
+### WS / DATA
+
+| 常量 | 事件名 | 说明 |
+|------|--------|------|
+| `WS.CONNECT` | `finite:ws:connect` | WebSocket 连接成功 |
+| `WS.CLOSE` | `finite:ws:close` | WebSocket 关闭 |
+| `WS.ERROR` | `finite:ws:error` | WebSocket 错误 |
+| `DATA.MESH_READY` | `finite:data:mesh_ready` | 网格就绪 |
+| `DATA.VERTICES_UPDATED` | `finite:data:vertices_updated` | 顶点更新 |
+| `DATA.SURFACE_UPDATED` | `finite:data:surface_updated` | 表面更新 |
+| `DATA.LINE_UPDATED` | `finite:data:line_updated` | 线更新 |
+| `DATA.EDGE_UPDATED` | `finite:data:edge_updated` | 边更新 |
+| `DATA.GRID_UPDATED` | `finite:data:grid_updated` | 网格线更新 |
+| `DATA.POINT_UPDATED` | `finite:data:point_updated` | 点更新 |
+| `DATA.FACE_UPDATED` | `finite:data:face_updated` | 面更新 |
+| `DATA.ATTR_UPDATED` | `finite:data:attr_updated` | 属性更新 |
+| `DATA.CUT_READY` | `finite:data:cut_ready` | 切片 bin 就绪（含 damfScenario 的 `GET_CUT_DAMF` 单包） |
+
+---
+
+## 监听绑定
+
+### 监听 State
+
+```js
+const eventHandlers = {
+  [STATES.ROOT.VCOUNT]: (payload) => {
+    // 渲染窗口数量变化后执行
+  },
 }
 
-/**
- * ┌─────────────────────────────────────────────────────────────────┐
- * │ 预演相关 state 区分                                              │
- * ├──────────────┬──────────────────────────────────────────────────┤
- * │ forecast     │ 全量 .damb 低透明叠层（overlayMesh），与主模型    │
- * │              │ 物理量版本无关，仅参考几何                         │
- * ├──────────────┼──────────────────────────────────────────────────┤
- * │ damfScenario │ 增量预演 id；加载 {id}.damf + 挂 forecast Actor │
- * │              │ normal=DB 几何 + damf res 前段                    │
- * │              │ forecast=damf 增量 mesh + damf res 后段         │
- * │              │ 云图不看 targetAttrVersion；测点仍走 WS           │
- * └──────────────┴──────────────────────────────────────────────────┘
- */
+proxy.watch(this) // 启动监听
+```
 
-/**
- * 获取proxy方法:
- * engine.getRootState()
- * engine.getAllViewerState()//[proxy,proxy]Viewer代理对象数组
- * engine.getAllActorState('Gdphc4s52BjQT1mRObv77')// { [matId]: stateProxy }（仅 normal 材料）
- * engine.getAllActorState(viewerId, 'measuring')// { [name]: stateProxy }
- * engine.getAllActorState(viewerId, 'eph')// 切片 Eph 材料
- * 获取边框线状态 engine.getAllActorState(viewerId)[matId].edge
- * 获取测点显隐 engine.getAllActorState(viewerId, 'measuring')['H01XH02'].show
- *
- * damfScenario 增量 forecast Actor：与 normal 同结构 state（show/grid/edge/opacity…），
- * 目前未接入 actor:state 的 type 路由；需通过 actorManager._forecast 内部 Map 读写（后续可扩展 type:'forecast'）。
- */
+### 监听 Event
 
-/**
- * 监听state绑定方法
- * 
- * const eventHandlers={
- *  [STATES.ROOT.VCOUNT]: (payload) => { //监听这个,意味着修改渲染窗口数量以后
-         //do something u need
-    },
-     ...
-     ...
-     ...
- * }
- * 
- * 
- * proxy.watch(this) //启动监听
- * 
- * 
- */
-
-
-
-
-//事件
-let EVENTS = {
-    ROOT: {
-        STATE: 'root:state' //******* 
-    },
-    VIEWER: {
-        RESIZE: 'viewer:resize', //发送后重新计算canvas尺寸
-        ID: 'viewer:id',
-        CAMERAVIEWE:'viewer:camera:view', //发送, 切换camera位置
-        CAMERASET:'viewer:camera:set',
-        STATE:'viewer:state', //修改单个viewer state时使用
-        RAY_CB:'viewer:ray:cb', // 订阅, ray模式返回数据
-        RAY_ProLine:'viewer:ray:processline',
-        SHOWMAX:'viewer:show:max', //发送,显示max标签
-        SHOWMIN:'viewer:show:min', //发送,显示min标签
-        CLEARMINMAX:'viewer:clear:minmax', //法相,清空标签
-        GETMAXTAS:'viewer:max:tas', //获取温度影里最大值
-        SENDMAXTAS:"viewer:max:res",//温度影里最大值回调
-        SHOWINTEGRAL:"viewer:show:integral",
-        HIDEINTEGRAL:"viewer:hide:integral",
-        INITDONE:"viewer:init:done", //初始化完成 可以setMeshName了
-        ALL_MESH_DONE:"viewer:allmesh:done", //全坝段线框 allMesh 加载完成
-        CLIP_POS_CB:'viewer:clipPos:cb', // 订阅, 剖切平面数据坐标位置回调
-    },
-    ACTOR: {
-        STATE: 'actor:state', //******* type 可选 normal|eph|measuring（forecast 待扩展）
-        DONE:'actor:done'    //可订阅；payload.kind 可为 normal|forecast|…，forecast 时带 scenarioId
-    },
-    ACTOR_GLOBAL: {
-        STATE: 'actor:global:state', //******* 
-    },
-    VIEWER_GLOBAL: {
-        RESIZE: 'viewer:global:resize',
-        ACTIVATE: 'viewer:global:activate',//切换viewer时会发送,带对象id
-        INDEX: 'viewer:global:index',
-        STATE: 'viewer:global:state', //******* 
-
-    },
-    SOME:{
-        STATE:'some:state',
-    },
-    WS: {
-        CONNECT: 'finite:ws:connect', //ws连接成功时发送
-        CLOSE: 'finite:ws:close',
-        ERROR: 'finite:ws:error',
-    },
-    DATA: { //你不一定用得到
-        MESH_READY: 'finite:data:mesh_ready',
-        VERTICES_UPDATED: 'finite:data:vertices_updated',
-        SURFACE_UPDATED: 'finite:data:surface_updated',
-        LINE_UPDATED: 'finite:data:line_updated',
-        EDGE_UPDATED: 'finite:data:edge_updated',
-        GRID_UPDATED: 'finite:data:grid_updated',
-        POINT_UPDATED: 'finite:data:point_updated',
-        FACE_UPDATED: 'finite:data:face_updated',
-        ATTR_UPDATED: 'finite:data:attr_updated',
-        CUT_READY: 'finite:data:cut_ready', //切片 bin 就绪（含 damfScenario 的 GET_CUT_DAMF 单包）
-    },
+```js
+const eventHandlers = {
+  [EVENTS.WS.CONNECT]: () => {
+    // WebSocket 连接成功
+  },
 }
 
-/**
- * 事件监听绑定方法:
- *  在对象上声明 eventHandlers={} 属性
- * const eventHandlers = {
-     [EVENTS.WS.CONNECT]: () => {  //使用事件上需要监听的字段当作key,value是一个箭头函数
-        //do something u need
-        //参数可能有可能没有
-     },
-     ...
-     ...
-     ...
-   }
-    event.watch(this) //this是需要监听的对象 
+event.watch(this) // this 为需要监听的对象
+engine.event.emit(EVENTS.ROOT.STATE)
+```
 
-   发送事件方法:event.emit
-   engine.event.emit(EVENTS.ROOT.STATE)
- */
+---
 
-/*************************
- * 修改state方法:
- * engine.event.emit(EVENTS.ROOT.STATE,{vCount:1}) 
- * engine.event.emit("root:state",{spriteImg：})
- * engine.event.emit(EVENTS.VIEWER.STATE,{...}) //单窗口，需带id
- * engine.event.emit("viewer:state",{id:'',state:{grid:false,edge:true,})
- * engine.event.emit(EVENTS.ACTOR.STATE,{...}) //单窗口但材料修改，需带id
- * engine.event.emit("actor:state",{viewer:'',actorid:'',state:{grid:false,edge:true,})
- * engine.event.emit(EVENTS.VIEWER_GLOBAL.STATE,{...}) //多窗口下
- * engine.event.emit("viewer:global:state",{id:['',''],state:{})
- * engine.event.emit(EVENTS.ACTOR_GLOBAL.STATE,{...}) //viewers传多个为多窗口多窗口的现因，需带viewer的id，不带表示全部//单窗口的所有actor
- * engine.event.emit("actor:global:state",{viewers:['',''],state:{grid:false,edge:true,})
- * 
- */
+## 常用示例
 
+### 切换浇筑步 / 物理场
+
+允许只改其中一部分，但 **`updateAttr` 总是需要修改**。
+
+```js
+engine.event.emit("viewer:state", {
+  viewerId: "meEnXC0yvSfZ10KxrLm-g",
+  state: {
+    targetAttr: "stress",
+    targetAttrVersion: 1767161923853,
+    targetMeshVersion: 1767161923853,
+    targetStep: 1,
+    targetAxis: 3,
+    updateAttr: Math.random(),
+  },
+})
+```
+
+### 增量预演 damfScenario
+
+```js
+// 开启（关闭：damfScenario: ""）
+engine.event.emit("viewer:global:state", {
+  state: { damfScenario: "your-scenario-id" },
+})
+
+// damf 模式下切换物理场：不需 targetAttrVersion
+engine.event.emit("viewer:state", {
+  viewerId: "<viewerId>",
+  state: {
+    targetAttr: "stress",
+    targetStep: "1",
+    targetAxis: 0,
+    updateAttr: Date.now(),
+  },
+})
+
+// 体拾取 / 切面拾取
+engine.event.emit("viewer:global:state", { state: { rayMode: "mesh" } })
+engine.event.emit("viewer:global:state", { state: { rayMode: "cut" } })
+
+// 切片（damfScenario 开启时内部 GET_CUT_DAMF）
+engine.event.emit("viewer:global:state", { state: { cut: Math.random() } })
+```
+
+### Actor 控制
+
+```js
+// 全部 actor → 点模式
+engine.event.emit("actor:global:state", {
+  viewerId: "axajqrpCGTVvRmILdCtrn",
+  state: { displayMode: "point" },
+})
+
+// 关闭网格
+engine.event.emit("actor:global:state", {
+  viewerId: "r9MaKsZX2QrLq2rpMj7R0",
+  state: { grid: false },
+})
+
+// 法线材料
+engine.event.emit("actor:global:state", {
+  viewerId: "kek02-YfADpTQQZHC5LzI",
+  state: { matStyle: "normal" },
+})
+
+// 单个 actor 隐藏
+engine.event.emit("actor:state", {
+  viewerId: "r9MaKsZX2QrLq2rpMj7R0",
+  matId: "1",
+  state: { show: false },
+})
+
+// 开启色阶，分两段
+engine.event.emit("actor:global:state", {
+  viewerId: "WFn2yEpDthoY8U67znzTu",
+  state: { usecolorStep: true, colorStepNum: 2 },
+})
+```
+
+### 全坝段线框显隐
+
+```js
+// 单个 viewer
+engine.event.emit("viewer:state", {
+  viewerId: "<viewerId>",
+  state: { allMeshShow: false },
+})
+
+// 全部 viewer
+engine.event.emit("viewer:global:state", {
+  state: { allMeshShow: true },
+})
+
+// 指定若干 viewer
+engine.event.emit("viewer:global:state", {
+  id: ["<viewerId1>", "<viewerId2>"],
+  state: { allMeshShow: false },
+})
+```
+
+---
+
+## 默认配置
+
+```js
 const defaultConfig = {
-    container: [],
-    axes: { size: '8rem', type: 'blender' },
-    renderer: {},         // ThreeRender 配置
-    wsUrl: "ws://sky.leve.vip:8888/jl_ws/",
-    server:"http://sky.leve.vip:3000/",
-    meshName:'test3',
-    camPos:{x: 315.6295145760044, y: 284.775713880556, z: 247.455733574656},
-    camTarget: {x: 40.152403153231, y: -3.3184214088838164, z: 124.09636532313567},
+  container: [],
+  axes: { size: "8rem", type: "blender" },
+  renderer: {},
+  wsUrl: "ws://sky.leve.vip:8888/jl_ws/",
+  server: "http://sky.leve.vip:3000/",
+  meshName: "test3",
+  camPos: { x: 315.63, y: 284.78, z: 247.46 },
+  camTarget: { x: 40.15, y: -3.32, z: 124.10 },
 }
+```
 
-//示例
+---
 
-//同时切换浇筑步/物理场,允许只修改其中一部分,但是updateAttr总是需要修改
-engine.event.emit("viewer:state",{
-    viewerId:"meEnXC0yvSfZ10KxrLm-g",
-    state:{
-        targetAttr: "stress",
-        targetAttrVersion:1767161923853,
-        targetMeshVersion:1767161923853,
-        targetStep:1,
-        targetAxis:3,
-        updateAttr:Math.random()
-    }
-})
-
-// ---------- 增量预演 damfScenario（与 state.forecast 全量 damb 叠层无关）----------
-// 前置：meshName 已加载且与 damf 内 mesh_name 一致；通常只需设 damfScenario
-engine.event.emit("viewer:global:state",{
-    state:{
-        damfScenario:"your-scenario-id"  // 关闭: damfScenario:""
-    }
-})
-// damf 模式下切换物理场：不需 targetAttrVersion；normal+forecast 共用 targetAttr/targetStep/targetAxis
-engine.event.emit("viewer:state",{
-    viewerId:"<viewerId>",
-    state:{
-        targetAttr:"stress",
-        targetStep:"1",
-        targetAxis:0,
-        updateAttr:Date.now()
-    }
-})
-// damf 体拾取 / 切面拾取
-engine.event.emit("viewer:global:state",{ state:{ rayMode:"mesh" } })  // normal+forecast 外表面
-engine.event.emit("viewer:global:state",{ state:{ rayMode:"cut" } })   // Eph 切面（需先切片）
-// 切片（damfScenario 开启时内部 GET_CUT_DAMF，服务端双域切、单包下发）
-engine.event.emit("viewer:global:state",{ state:{ cut:Math.random() } }) // 或 showClipPlane + clipPlaneConstant
-
-//某个viewer下全部actor 改为点模式
-engine.event.emit("actor:global:state",{
-    viewerId:"axajqrpCGTVvRmILdCtrn",
-    state:{
-      displayMode:"point"
-    }
-})
-
-//某个viewer下全部actor的网格显示关闭
-engine.event.emit("actor:global:state",{
-    viewerId:"r9MaKsZX2QrLq2rpMj7R0",
-    state:{
-        grid:false
-    }
-})
-
-//某个viewer下全部actor的材料使用法线材料
-engine.event.emit("actor:global:state",{
-    viewerId:"kek02-YfADpTQQZHC5LzI",
-    state:{
-        matStyle:"normal"
-    }
-})
-
-//某个viewer下 材料号为1的单个actor,关闭显示
-engine.event.emit("actor:state",{
-    viewerId:"r9MaKsZX2QrLq2rpMj7R0",
-    matId:"1",
-    state:{
-        show:false
-    }
-})
-
-//某个viewer下全部actor,开启色阶,分两段
-engine.event.emit("actor:global:state",{
-    viewerId:"WFn2yEpDthoY8U67znzTu",
-    state:{
-        usecolorStep: true,
-        colorStepNum: 2,
-    }
-})
-
-//单个 viewer 隐藏全坝段线框（不影响其他窗口）
-engine.event.emit("viewer:state",{
-    viewerId:"<viewerId>",
-    state:{ allMeshShow: false }
-})
-//全部 viewer 同步显隐
-engine.event.emit("viewer:global:state",{
-    state:{ allMeshShow: true }
-})
-//指定若干 viewer 同步显隐
-engine.event.emit("viewer:global:state",{
-    id:["<viewerId1>","<viewerId2>"],
-    state:{ allMeshShow: false }
-})
+*字段与事件定义见 [`字段定义.js`](./字段定义.js)。*

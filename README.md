@@ -4,6 +4,13 @@
 
 ## ChangeLog
 
+### 2026-07-16
+
+- 新增 VIEWER 字段 `envelopeMode`（见 `字段定义.js` `ENVELOPE_MODE`）：`null`/`""` 关闭；`"max"` / `"min"` 显示最大/最小包络云图
+- 开启后旁路 `GET /damviewer/envelope`（缺缓存会先 `POST` 构建），忽略 `targetAttrVersion` / `targetStep`；仅改 `envelopeMode` 也会自动刷云图
+- `displacements` 包络仍走 `updateDisp`，变形系数 `dispCoef` 照常生效
+- 仅一个 attrVersion（甚至单 step）也可算包络；单 step 时 min/max 相同
+
 ### 2026-07-14
 
 - 新增 VIEWER 字段 `dualMeshName`：启用/关闭双 msh 加载（非空进入 dual 并同步 `meshName`；`null`/`""` 关闭后按 normal 重载）
@@ -21,6 +28,7 @@
   - [VIEWER](#viewer)
   - [ACTOR](#actor)
 - [预演相关说明](#预演相关说明-forecast--damfscenario)
+- [包络图（envelopeMode）](#包络图envelopemode)
 - [双 msh（dualMeshName）](#双-mshdualmeshname)
 - [Event 事件](#event-事件)
 - [监听绑定](#监听绑定)
@@ -99,15 +107,16 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 | `MESH_NAME` | `meshName` | 网格名 |
 | `DUAL_MESH_NAME` | `dualMeshName` | 双 msh 网格名（单个 string）；非空进入 dual 并同步 `meshName`；`null`/`""` 关闭后按 normal 重载 |
 | `TARGET_ATTR` | `targetAttr` | 物理量名 |
-| `TARGET_ATTR_VERSION` | `targetAttrVersion` | 物理量版本（`damfScenario` 开启时不参与云图，走 damf 旁路） |
+| `TARGET_ATTR_VERSION` | `targetAttrVersion` | 物理量版本（`damfScenario` / `envelopeMode` 开启时不参与云图旁路） |
 | `TARGET_MESH_VERSION` | `targetMeshVersion` | 浇筑版本（damf 打开时自动对齐 `base_mesh_version`） |
 | `TARGET_STEP` | `targetStep` | 物理量小步 |
-| `TARGET_AXIS` | `targetAxis` | 选中轴下标 `0/1/2`（x/y/z） |
+| `TARGET_AXIS` | `targetAxis` | 选中轴下标 `0/1/2`（x/y/z）；位移常用 `3` 合位移 |
 | `UPDATE_ATTR` | `updateAttr` | 更新 `target*` 后触发云图刷新（**必填触发项**） |
 | `ALL_MESH` | `allMesh` | 全坝段线框文件名或空 |
 | `ALL_MESH_SHOW` | `allMeshShow` | 全坝段线框显隐（默认 `true`）；各窗口可分别控制 |
 | `FORECAST` | `forecast` | 全量 `.damb` 低透明叠层（overlayMesh），非 damf 增量预演 |
 | `DAMF_SCENARIO` | `damfScenario` | 增量预演 damf 场景 id；空字符串 = 关闭 |
+| `ENVELOPE_MODE` | `envelopeMode` | 包络图：`null`/`""` 关；`"max"` 最大包络；`"min"` 最小包络（见下方专节） |
 | `COLOR_PALETTE` | `colorPalette` | 色板图 base64 |
 | `NUM_ARR` | `numArr` | 最大最小值显式数组（字符串数组） |
 | `MESH_VERSIONS` | `meshVersions` | 浇筑版本列表 |
@@ -160,6 +169,27 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 | `damfScenario` | 增量预演 id；加载 `{id}.damf` + 挂 forecast Actor。`normal` = DB 几何 + damf res 前段；`forecast` = damf 增量 mesh + damf res 后段。云图不看 `targetAttrVersion`；测点仍走 WS |
 
 **前置条件**：`meshName` 已加载且与 damf 内 `mesh_name` 一致；通常只需设置 `damfScenario`。
+
+---
+
+## 包络图（envelopeMode）
+
+对应 `字段定义.js` 的 `VIEWER.ENVELOPE_MODE` / `envelopeMode`。
+
+| 值 | 行为 |
+|----|------|
+| `null` / `""` | 关闭，走普通 `requestAttr` 或 damf 旁路 |
+| `"max"` | 显示最大包络场 |
+| `"min"` | 显示最小包络场 |
+
+要点：
+
+- 开启后旁路 `GET /damviewer/envelope?mesh=&attrName=`（缺缓存会先 `POST` 构建）
+- **忽略** `targetAttrVersion` / `targetStep`；仍使用 `targetAttr` + `targetAxis`
+- 数据源优先级：`envelopeMode` → `damfScenario` → 普通 attr
+- 仅改 `envelopeMode` 会自动刷新云图；切换物理量时仍建议 bump `updateAttr`
+- `displacements`：写入 `updateDisp`，变形由 actor `dispCoef` 控制
+- 仅一个 attrVersion 也可算；若只有一个 step，则 min/max 相同
 
 ---
 
@@ -288,6 +318,38 @@ engine.event.emit("viewer:state", {
     targetAxis: 3,
     updateAttr: Math.random(),
   },
+})
+```
+
+### 包络图 envelopeMode
+
+与 `字段定义.js` 示例一致。
+
+```js
+// 开最大包络（可与 targetAttr / targetAxis / updateAttr 同一次写入）
+engine.event.emit("viewer:state", {
+  viewerId: "<viewerId>",
+  state: {
+    envelopeMode: "max", // 或 "min"；关闭: null / ""
+    targetAttr: "stress",
+    targetAxis: 0,
+    updateAttr: Date.now(),
+  },
+})
+
+// 位移包络 + 变形（dispCoef 仍写 actor）
+engine.event.emit("viewer:state", {
+  viewerId: "<viewerId>",
+  state: {
+    envelopeMode: "min",
+    targetAttr: "displacements",
+    targetAxis: 3,
+    updateAttr: Date.now(),
+  },
+})
+engine.event.emit("actor:global:state", {
+  viewerId: "<viewerId>",
+  state: { dispCoef: 50 },
 })
 ```
 

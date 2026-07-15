@@ -6,8 +6,11 @@
 
 ### 2026-07-16
 
+- 新增引擎根 **网络忙状态**：`root.networkBusy` / `networkActive` / `networkByKind`，事件 `net:busy`（兼 `net:start` / `net:end`）
+- 覆盖 WS（`sendQuery`）、damf 加载挂载、damb、meshVersions；cache 命中不计 busy
 - 新增 VIEWER 字段 `envelopeMode`（见 `字段定义.js` `ENVELOPE_MODE`）：`null`/`""` 关闭；`"max"` / `"min"` 显示最大/最小包络云图
-- 开启后旁路 `GET /damviewer/envelope`（缺缓存会先 `POST` 构建），忽略 `targetAttrVersion` / `targetStep`；仅改 `envelopeMode` 也会自动刷云图
+- 开启后旁路 **WS `GET_ENVELOPE`**（二进制格式与 `GET_ATTR` 相同；缺缓存时服务端先 Build），忽略 `targetAttrVersion` / `targetStep`；仅改 `envelopeMode` 也会自动刷云图
+- HTTP `POST/GET /damviewer/envelope` 仍可用于调试/强制刷新；前端显示链路不走 HTTP
 - `displacements` 包络仍走 `updateDisp`，变形系数 `dispCoef` 照常生效
 - 仅一个 attrVersion（甚至单 step）也可算包络；单 step 时 min/max 相同
 
@@ -29,6 +32,7 @@
   - [ACTOR](#actor)
 - [预演相关说明](#预演相关说明-forecast--damfscenario)
 - [包络图（envelopeMode）](#包络图envelopemode)
+- [网络忙状态（networkBusy）](#网络忙状态networkbusy)
 - [双 msh（dualMeshName）](#双-mshdualmeshname)
 - [Event 事件](#event-事件)
 - [监听绑定](#监听绑定)
@@ -89,6 +93,9 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 | `LOCK_CAM` | `lockCam` | 是否锁定相机联动 |
 | `SPRITE_IMG` | `spriteImg` | 标签贴图 base64 / url |
 | `LEGEND_IMAGE` | `legendImage` | 图例图片 base64 |
+| `NETWORK_BUSY` | `networkBusy` | 全局是否有在途网络任务（WS / damf / damb 等） |
+| `NETWORK_ACTIVE` | `networkActive` | 在途任务数 |
+| `NETWORK_BY_KIND` | `networkByKind` | 按 kind 计数，如 `{ ws: 2, damf: 1 }` |
 
 ### VIEWER
 
@@ -184,12 +191,44 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 
 要点：
 
-- 开启后旁路 `GET /damviewer/envelope?mesh=&attrName=`（缺缓存会先 `POST` 构建）
+- 开启后旁路 **WS `GET_ENVELOPE`**（`mesh` + `name` + `mode:min|max`），二进制流与 `GET_ATTR` 相同（LE float32，按 stride）
+- 缺缓存时服务端在同一次请求内 `BuildEnvelope` 再下发；HTTP `POST /damviewer/envelope` 仍可手动全量刷新
 - **忽略** `targetAttrVersion` / `targetStep`；仍使用 `targetAttr` + `targetAxis`
 - 数据源优先级：`envelopeMode` → `damfScenario` → 普通 attr
 - 仅改 `envelopeMode` 会自动刷新云图；切换物理量时仍建议 bump `updateAttr`
 - `displacements`：写入 `updateDisp`，变形由 actor `dispCoef` 控制
 - 仅一个 attrVersion 也可算；若只有一个 step，则 min/max 相同
+
+---
+
+## 网络忙状态（networkBusy）
+
+挂在 **引擎根**（`DVEngineContext` / `NetStatusManager`），不放在 finite 业务层。WS 池与 forecast HTTP 统一引用计数。
+
+| kind | 来源 |
+|------|------|
+| `ws` | `Net.sendQuery`（attr / envelope / topo / cut…） |
+| `damf` | damf 加载 + 挂载整段 |
+| `http.damb` | `allMesh` / `forecast` 的 damb |
+| `http.meshVersions` | mesh 切换拉版本列表 |
+| `http.forecast` / `http.forecast.warm` | 单独拉 damf / 预热（未被外层 `damf` 包住时） |
+
+cache 命中不计 busy。
+
+```js
+// 绑 UI
+engine.getRootState().watch('networkBusy', (busy) => {
+  // loading overlay
+})
+
+// 或事件
+engine.event.on('net:busy', ({ busy, active, byKind }) => { /* ... */ })
+
+// 快照
+engine.getNetStatus?.() // { busy, active, byKind }
+```
+
+相关事件：`net:start` / `net:end` / `net:busy`（常量 `EVENTS.NET.*`）。
 
 ---
 
@@ -212,6 +251,14 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 | 常量 | 事件名 | 说明 |
 |------|--------|------|
 | `STATE` | `root:state` | 修改根状态 |
+
+### NET
+
+| 常量 | 事件名 | 说明 |
+|------|--------|------|
+| `START` | `net:start` | 单个网络任务开始 `{ id, kind, meta, busy, active, byKind }` |
+| `END` | `net:end` | 单个网络任务结束 `{ id, kind, ok, error?, … }` |
+| `BUSY` | `net:busy` | 汇总忙状态变化 `{ busy, active, byKind }` |
 
 ### VIEWER
 
@@ -319,6 +366,20 @@ engine.event.emit("viewer:state", {
     updateAttr: Math.random(),
   },
 })
+```
+
+### 网络忙状态
+
+```js
+engine.getRootState().watch("networkBusy", (busy) => {
+  // loading overlay
+})
+
+engine.event.on("net:busy", ({ busy, active, byKind }) => {
+  // byKind.ws / byKind.damf / …
+})
+
+engine.getNetStatus() // { busy, active, byKind }
 ```
 
 ### 包络图 envelopeMode

@@ -4,6 +4,10 @@
 
 ## ChangeLog
 
+### 2026-07-20
+
+- 内部自动相机 fit 与外部 `viewer:camera:view` 分离；内部完成后 emit `viewer:camera:view:done`（payload: `{ id, source }`）
+
 ### 2026-07-16
 
 - 新增引擎根 **网络忙状态**：`root.networkBusy` / `networkActive` / `networkByKind`，事件 `net:busy`（兼 `net:start` / `net:end`）
@@ -266,7 +270,8 @@ engine.getNetStatus?.() // { busy, active, byKind }
 |------|--------|------|
 | `RESIZE` | `viewer:resize` | 重新计算 canvas 尺寸 |
 | `ID` | `viewer:id` | Viewer ID 相关 |
-| `CAMERAVIEWE` | `viewer:camera:view` | 切换 camera 位置 |
+| `CAMERAVIEWE` | `viewer:camera:view` | 外部发送：切换 camera 位置（与内部自动 fit 分离） |
+| `CAMERA_VIEW_DONE` | `viewer:camera:view:done` | 内部自动 fit 动画结束；payload: `{ id, source }` |
 | `CAMERASET` | `viewer:camera:set` | 设置相机 |
 | `STATE` | `viewer:state` | 修改单个 viewer state |
 | `RAY_CB` | `viewer:ray:cb` | 订阅：ray 模式返回数据 |

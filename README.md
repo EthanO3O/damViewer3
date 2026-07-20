@@ -6,6 +6,7 @@
 
 ### 2026-07-20
 
+- 新增 VIEWER 字段 `dams` / `slopeLineWidth`：加载 `.dams` → **SlopeActor**（粗线 LineSegments2 + JC 白/BD·GD 黑/其它深灰点球；线色走 Actor LUT 深蓝→深红）
 - 内部自动相机 fit 与外部 `viewer:camera:view` 分离；内部完成后 emit `viewer:camera:view:done`（payload: `{ id, source }`）
 
 ### 2026-07-16
@@ -28,20 +29,42 @@
 
 ## 目录
 
-- [获取 Proxy](#获取-proxy)
-- [修改 State](#修改-state)
-- [State 字段](#state-字段)
-  - [ROOT](#root)
-  - [VIEWER](#viewer)
-  - [ACTOR](#actor)
-- [预演相关说明](#预演相关说明-forecast--damfscenario)
-- [包络图（envelopeMode）](#包络图envelopemode)
-- [网络忙状态（networkBusy）](#网络忙状态networkbusy)
-- [双 msh（dualMeshName）](#双-mshdualmeshname)
-- [Event 事件](#event-事件)
-- [监听绑定](#监听绑定)
-- [常用示例](#常用示例)
-- [默认配置](#默认配置)
+- [DamViewer Stream — State \& Event API](#damviewer-stream--state--event-api)
+  - [ChangeLog](#changelog)
+    - [2026-07-20](#2026-07-20)
+    - [2026-07-16](#2026-07-16)
+    - [2026-07-14](#2026-07-14)
+  - [目录](#目录)
+  - [获取 Proxy](#获取-proxy)
+  - [修改 State](#修改-state)
+  - [State 字段](#state-字段)
+    - [ROOT](#root)
+    - [VIEWER](#viewer)
+    - [ACTOR](#actor)
+  - [预演相关说明（forecast / damfScenario）](#预演相关说明forecast--damfscenario)
+  - [包络图（envelopeMode）](#包络图envelopemode)
+  - [网络忙状态（networkBusy）](#网络忙状态networkbusy)
+  - [双 msh（dualMeshName）](#双-mshdualmeshname)
+  - [Event 事件](#event-事件)
+    - [ROOT](#root-1)
+    - [NET](#net)
+    - [VIEWER](#viewer-1)
+    - [ACTOR](#actor-1)
+    - [ACTOR\_GLOBAL / VIEWER\_GLOBAL](#actor_global--viewer_global)
+    - [WS / DATA](#ws--data)
+  - [监听绑定](#监听绑定)
+    - [监听 State](#监听-state)
+    - [监听 Event](#监听-event)
+  - [常用示例](#常用示例)
+    - [切换浇筑步 / 物理场](#切换浇筑步--物理场)
+    - [边坡监测 dams / SlopeActor](#边坡监测-dams--slopeactor)
+    - [网络忙状态](#网络忙状态)
+    - [包络图 envelopeMode](#包络图-envelopemode)
+    - [双 msh dualMeshName](#双-msh-dualmeshname)
+    - [增量预演 damfScenario](#增量预演-damfscenario)
+    - [Actor 控制](#actor-控制)
+    - [全坝段线框显隐](#全坝段线框显隐)
+  - [默认配置](#默认配置)
 
 ---
 
@@ -147,6 +170,9 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 | `OPACITY` | `opacity` | viewer 级透明度 `0–1`，统一下发到各 actor |
 | `USE_DEFAULT_COLOR` | `useDefaultColor` | viewer 级默认色，统一下发到各 actor |
 | `MEASURING` | `measuring` | 测点数据 `Point[]` 或 `{ config?, measuring:[] }`；显隐/透明度走 `actorManager(type=measuring)` |
+| `DAMS` | `dams` | 边坡监测 dams id；空=关闭；加载 `{server}dams/{id}` → SlopeActor |
+| `SLOPE_LINE_WIDTH` | `slopeLineWidth` | SlopeActor 线宽（像素），默认 `3.5` |
+| `SLOPE_POINT_RADIUS` | `slopePointRadius` | SlopeActor 点球世界半径，默认 `0.8` |
 
 ### ACTOR
 
@@ -370,6 +396,27 @@ engine.event.emit("viewer:state", {
     targetAxis: 3,
     updateAttr: Math.random(),
   },
+})
+```
+
+### 边坡监测 dams / SlopeActor
+
+```js
+engine.event.emit("viewer:state", {
+  viewerId: "<viewerId>",
+  state: {
+    dams: "xiluodu-meas",
+    slopeLineWidth: 3.5, //线宽
+    slopePointRadius: 0.8, //点大小
+    targetAttr: "目标位移测值(mm)",
+    targetStep: "2026-07-01 11:00:00",
+    updateAttr: Math.random(),
+  },
+})
+// 关闭
+engine.event.emit("viewer:state", {
+  viewerId: "<viewerId>",
+  state: { dams: "" },
 })
 ```
 

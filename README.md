@@ -1,8 +1,16 @@
 # DamViewer Stream — State & Event API
 
-基于 `字段定义.js` 的状态字段与事件接口说明。通过 `engine.event.emit` 修改状态，通过 `proxy.watch` / `event.watch` 监听变化。
+基于 `字段定义.js` 的状态字段与事件接口说明。通过 `engine.event.emit` 修改状态；State 用 `proxy.watch` / `unwatch`，Event 用 `event.on` / `off`（或 `event.watch` / `unwatch`）监听与取消。
 
 ## ChangeLog
+
+### 2026-07-23
+
+- 补充 State / Event 监听与取消监听 API（`watch` / `unwatch`、`on` / `off` / `once`）
+
+### 2026-07-21
+
+- 新增 VIEWER 字段 `colorLegendVisible`（默认 `false`）：每 viewer 右下角色标图例，仅 `true` 时显示
 
 ### 2026-07-20
 
@@ -54,7 +62,9 @@
     - [WS / DATA](#ws--data)
   - [监听绑定](#监听绑定)
     - [监听 State](#监听-state)
+    - [取消 State 监听](#取消-state-监听)
     - [监听 Event](#监听-event)
+    - [取消 Event 监听](#取消-event-监听)
   - [常用示例](#常用示例)
     - [切换浇筑步 / 物理场](#切换浇筑步--物理场)
     - [边坡监测 dams / SlopeActor](#边坡监测-dams--slopeactor)
@@ -153,6 +163,7 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 | `ENVELOPE_MODE` | `envelopeMode` | 包络图：`null`/`""` 关；`"max"` 最大包络；`"min"` 最小包络（见下方专节） |
 | `COLOR_PALETTE` | `colorPalette` | 色板图 base64 |
 | `NUM_ARR` | `numArr` | 最大最小值显式数组（字符串数组） |
+| `COLOR_LEGEND_VISIBLE` | `colorLegendVisible` | 右下角色标图例显隐，默认 `false` |
 | `MESH_VERSIONS` | `meshVersions` | 浇筑版本列表 |
 | `MIN` | `min` | 当前显式内容最小值 |
 | `MAX` | `max` | 当前显式内容最大值 |
@@ -246,16 +257,24 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 cache 命中不计 busy。
 
 ```js
-// 绑 UI
-engine.getRootState().watch('networkBusy', (busy) => {
-  // loading overlay
-})
+// 绑 UI（State）
+const netUi = {
+  stateHandlers: {
+    networkBusy: (busy) => { /* loading overlay */ },
+  },
+}
+engine.getRootState().watch(netUi)
 
-// 或事件
-engine.event.on('net:busy', ({ busy, active, byKind }) => { /* ... */ })
+// 或事件（busy 仅在 true↔false 翻转时发出）
+const onBusy = ({ busy, active, byKind }) => { /* ... */ }
+engine.event.on('net:busy', onBusy)
 
 // 快照
 engine.getNetStatus?.() // { busy, active, byKind }
+
+// 取消
+engine.getRootState().unwatchAll(netUi)
+engine.event.off('net:busy', onBusy)
 ```
 
 相关事件：`net:start` / `net:end` / `net:busy`（常量 `EVENTS.NET.*`）。
@@ -352,30 +371,103 @@ engine.getNetStatus?.() // { busy, active, byKind }
 
 ## 监听绑定
 
+State 与 Event 是两套 API：改字段走 state proxy；发/收消息走 `engine.event`。
+
 ### 监听 State
 
+拿到 proxy（如 `engine.getRootState()`、viewer/actor state）后订阅字段变化。推荐在对象上声明 `stateHandlers`，再 `watch`：
+
 ```js
-const eventHandlers = {
-  [STATES.ROOT.VCOUNT]: (payload) => {
-    // 渲染窗口数量变化后执行
+const ui = {
+  stateHandlers: {
+    // key = 字段名；回调 (newVal, oldVal)
+    [STATES.ROOT.VCOUNT]: (vCount, prev) => {
+      // 渲染窗口数量变化
+    },
+    networkBusy: (busy) => {
+      // loading overlay
+    },
   },
 }
 
-proxy.watch(this) // 启动监听
+const root = engine.getRootState()
+root.watch(ui) // 一次性绑上 ui.stateHandlers 里所有 key
+```
+
+也可按字段订阅（第 2 参为 subscriber 身份，用于之后 unwatch；第 3 参可选自定义回调）：
+
+```js
+const token = {}
+root.watch('networkBusy', token, (_sub, _key, oldVal, newVal) => {
+  // newVal === busy
+})
+
+// 若省略第 3 参，则调用 token.stateHandlers.networkBusy(newVal, oldVal)
+root.watch('networkBusy', ui)
+```
+
+> 注意：`watch('networkBusy', (busy) => {})` **无效**——第 2 参是 subscriber，不是回调。请用 `stateHandlers` 或三参数形式。
+
+变更在微任务中批处理：同一次 tick 内多次赋值，按 key 合并后再回调。
+
+### 取消 State 监听
+
+```js
+const root = engine.getRootState()
+
+root.unwatch('networkBusy', ui) // 取消某一字段
+root.unwatchAll(ui)             // 取消该 subscriber 上所有字段（dispose 常用）
 ```
 
 ### 监听 Event
 
+两种写法等价可用：
+
+**1. `on` / `once`（业务侧常用）**
+
 ```js
-const eventHandlers = {
-  [EVENTS.WS.CONNECT]: () => {
-    // WebSocket 连接成功
+const onBusy = ({ busy, active, byKind }) => { /* ... */ }
+const onRay = (payload) => { /* ... */ }
+
+engine.event.on('net:busy', onBusy)
+engine.event.on(EVENTS.VIEWER.RAY_CB, onRay)
+
+// 只触发一次，自动卸掉
+engine.event.once('finite:ws:connect', () => { /* ... */ })
+```
+
+**2. `watch` + `eventHandlers`（模块内部常用）**
+
+```js
+const mod = {
+  eventHandlers: {
+    [EVENTS.WS.CONNECT]: () => { /* WebSocket 连接成功 */ },
+    'viewer:ray:cb': (payload) => { /* ... */ },
   },
 }
 
-event.watch(this) // this 为需要监听的对象
-engine.event.emit(EVENTS.ROOT.STATE)
+engine.event.watch(mod) // 把 mod.eventHandlers 全部挂上
 ```
+
+发送：`engine.event.emit(eventName, detail?)`。
+
+### 取消 Event 监听
+
+```js
+// on 时必须保留同一函数引用，才能精确 off
+engine.event.off('net:busy', onBusy)
+
+// 去掉该事件上全部监听
+engine.event.off('net:busy')
+
+// 通配符
+engine.event.off('net:*')
+
+// watch 注册的，用 unwatch 整对象卸掉
+engine.event.unwatch(mod)
+```
+
+> 匿名函数无法取消：`on('net:busy', () => {})` 之后无法精确 `off`。请先赋给变量再 `on` / `off`。
 
 ---
 
@@ -423,15 +515,23 @@ engine.event.emit("viewer:state", {
 ### 网络忙状态
 
 ```js
-engine.getRootState().watch("networkBusy", (busy) => {
-  // loading overlay
-})
+const netUi = {
+  stateHandlers: {
+    networkBusy: (busy) => { /* loading overlay */ },
+  },
+}
+engine.getRootState().watch(netUi)
 
-engine.event.on("net:busy", ({ busy, active, byKind }) => {
+const onBusy = ({ busy, active, byKind }) => {
   // byKind.ws / byKind.damf / …
-})
+}
+engine.event.on("net:busy", onBusy)
 
 engine.getNetStatus() // { busy, active, byKind }
+
+// 取消
+engine.getRootState().unwatchAll(netUi)
+engine.event.off("net:busy", onBusy)
 ```
 
 ### 包络图 envelopeMode

@@ -4,6 +4,11 @@
 
 ## ChangeLog
 
+### 2026-07-26
+
+- 新增 ROOT 字段 `switchFx`：统一开关三种切换动效（`meshName` 平面扫光 / `drawRange` faceFly / `attr` 颜色交叉淡入）
+- `false` 全关；`true` 或缺省全开；对象 `{ meshName, drawRange, attr }` 可分别控制
+
 ### 2026-07-23
 
 - 补充 State / Event 监听与取消监听 API（`watch` / `unwatch`、`on` / `off` / `once`）
@@ -12,10 +17,15 @@
 
 - 新增 VIEWER 字段 `colorLegendVisible`（默认 `false`）：每 viewer 右下角色标图例，仅 `true` 时显示
 
+### 2026-07-29
+
+- `viewer:camera:view:done`：等全部 topo 落定 + actor/扫光完成后再最终 fit；done 后关闭自动 fit，外部可安全改相机
+
 ### 2026-07-20
 
 - 新增 VIEWER 字段 `dams` / `slopeLineWidth`：加载 `.dams` → **SlopeActor**（粗线 LineSegments2 + JC 白/BD·GD 黑/其它深灰点球；线色走 Actor LUT 深蓝→深红）
 - 内部自动相机 fit 与外部 `viewer:camera:view` 分离；内部完成后 emit `viewer:camera:view:done`（payload: `{ id, source }`）
+- `viewer:camera:view:done` 表示**内部视角处理已结束**（全部 topo 落定 + actor 构建/扫光完成 + 最终 fit 动画结束），外部此时可安全改相机；之后不会再因增量 topo 自动重置视角
 
 ### 2026-07-16
 
@@ -51,6 +61,7 @@
     - [ACTOR](#actor)
   - [预演相关说明（forecast / damfScenario）](#预演相关说明forecast--damfscenario)
   - [包络图（envelopeMode）](#包络图envelopemode)
+  - [切换动效（switchFx）](#切换动效switchfx)
   - [网络忙状态（networkBusy）](#网络忙状态networkbusy)
   - [双 msh（dualMeshName）](#双-mshdualmeshname)
   - [Event 事件](#event-事件)
@@ -68,6 +79,7 @@
   - [常用示例](#常用示例)
     - [切换浇筑步 / 物理场](#切换浇筑步--物理场)
     - [边坡监测 dams / SlopeActor](#边坡监测-dams--slopeactor)
+    - [切换动效 switchFx](#切换动效-switchfx)
     - [网络忙状态](#网络忙状态)
     - [包络图 envelopeMode](#包络图-envelopemode)
     - [双 msh dualMeshName](#双-msh-dualmeshname)
@@ -133,6 +145,7 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 | `NETWORK_BUSY` | `networkBusy` | 全局是否有在途网络任务（WS / damf / damb 等） |
 | `NETWORK_ACTIVE` | `networkActive` | 在途任务数 |
 | `NETWORK_BY_KIND` | `networkByKind` | 按 kind 计数，如 `{ ws: 2, damf: 1 }` |
+| `SWITCH_FX` | `switchFx` | 三种切换动效总开关（见下方专节） |
 
 ### VIEWER
 
@@ -242,6 +255,50 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 
 ---
 
+## 切换动效（switchFx）
+
+挂在 **引擎根**（`root.state.switchFx`），默认全开：
+
+```js
+{
+  meshName: true,   // meshName 切换：平面扫光（出/入）
+  drawRange: true,  // meshVersion / drawRange：faceFly 增减面动效
+  attr: true,       // 物理量切换：shader 颜色交叉淡入
+}
+```
+
+| 写法 | 行为 |
+|------|------|
+| 缺省 / `true` | 三种动效全开 |
+| `false` | 三种动效全关（瞬时切换） |
+| `{ meshName, drawRange, attr }` | 按字段分别开关；某键 `!== false` 即开 |
+
+通过 `root:state` 修改（赋值整对象更稳妥，避免只改嵌套字段时漏触发）：
+
+```js
+// 全关
+engine.event.emit("root:state", { switchFx: false })
+
+// 只保留 mesh 扫光，关掉 drawRange / attr
+engine.event.emit("root:state", {
+  switchFx: { meshName: true, drawRange: false, attr: false },
+})
+
+// 恢复默认全开
+engine.event.emit("root:state", {
+  switchFx: { meshName: true, drawRange: true, attr: true },
+})
+```
+
+也可直接写根 state：
+
+```js
+const root = engine.getRootState()
+root.switchFx = { meshName: true, drawRange: false, attr: false }
+```
+
+---
+
 ## 网络忙状态（networkBusy）
 
 挂在 **引擎根**（`DVEngineContext` / `NetStatusManager`），不放在 finite 业务层。WS 池与 forecast HTTP 统一引用计数。
@@ -316,7 +373,7 @@ engine.event.off('net:busy', onBusy)
 | `RESIZE` | `viewer:resize` | 重新计算 canvas 尺寸 |
 | `ID` | `viewer:id` | Viewer ID 相关 |
 | `CAMERAVIEWE` | `viewer:camera:view` | 外部发送：切换 camera 位置（与内部自动 fit 分离） |
-| `CAMERA_VIEW_DONE` | `viewer:camera:view:done` | 内部自动 fit 动画结束；payload: `{ id, source }` |
+| `CAMERA_VIEW_DONE` | `viewer:camera:view:done` | 内部视角处理结束，外部可改相机；payload: `{ id, source }` |
 | `CAMERASET` | `viewer:camera:set` | 设置相机 |
 | `STATE` | `viewer:state` | 修改单个 viewer state |
 | `RAY_CB` | `viewer:ray:cb` | 订阅：ray 模式返回数据 |
@@ -510,6 +567,18 @@ engine.event.emit("viewer:state", {
   viewerId: "<viewerId>",
   state: { dams: "" },
 })
+```
+
+### 切换动效 switchFx
+
+```js
+// 性能优先：关掉 drawRange / attr，保留 meshName 扫光
+engine.event.emit("root:state", {
+  switchFx: { meshName: true, drawRange: false, attr: false },
+})
+
+// 全部瞬时切换（无动效）
+engine.event.emit("root:state", { switchFx: false })
 ```
 
 ### 网络忙状态

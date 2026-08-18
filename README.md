@@ -4,6 +4,24 @@
 
 ## ChangeLog
 
+### 2026-08-17
+
+- 剖切辅助面控件整体加大；鼠标悬停拾取到手柄即放大，点击后不再二次放大（旋转环按轴放大，避免位移跑偏）
+- 双 msh：几何改为加载 `{server}damb/{meshName}`（不再走 WS/DB 拓扑）；第二层材料号偏移 **`+10000`**（原 `100000` 废弃）
+
+### 2026-08-10
+
+- 新增应力链：`stressChainMode` 开启后自动 `rayMode=mesh`，**Ctrl+左键**点选 normal / forecast 顶点生成单链（覆盖）
+- 走 WS `GET_STRESS_CHAIN`；独立 Actor（壳 + 中心线 + 方向箭头 + 端点标记），不入 cache、不参与主网格拾取
+- 需 `targetAttr: "stress"`；`p1/p2/p3`（轴 6/7/8）可单独切；种子策略 `nearHit` / `maxAbs`
+
+### 2026-08-04
+
+- 新增 ACTOR 位移矢量箭头：`arrow` / `arrowMode` / `arrowScale` / `arrowAspect` / `arrowMinMag` / `arrowStride`
+- GPU 实例化（杆 + 固定锥角圆锥头）；默认合力向量，可选 XYZ 三轴分显
+- 支持 **normal / eph（切片）/ forecast（damf）**；`actor:global:state` 未指定 `type` 时三层一起写
+- 需先加载 `targetAttr: "displacements"`；最长箭头 ≈ 模型对角线 × 3% × `arrowScale`
+
 ### 2026-07-26
 
 - 新增 ROOT 字段 `switchFx`：统一开关三种切换动效（`meshName` 平面扫光 / `drawRange` faceFly / `attr` 颜色交叉淡入）
@@ -49,6 +67,13 @@
 
 - [DamViewer Stream — State \& Event API](#damviewer-stream--state--event-api)
   - [ChangeLog](#changelog)
+    - [2026-08-17](#2026-08-17)
+    - [2026-08-10](#2026-08-10)
+    - [2026-08-04](#2026-08-04)
+    - [2026-07-26](#2026-07-26)
+    - [2026-07-23](#2026-07-23)
+    - [2026-07-21](#2026-07-21)
+    - [2026-07-29](#2026-07-29)
     - [2026-07-20](#2026-07-20)
     - [2026-07-16](#2026-07-16)
     - [2026-07-14](#2026-07-14)
@@ -61,6 +86,8 @@
     - [ACTOR](#actor)
   - [预演相关说明（forecast / damfScenario）](#预演相关说明forecast--damfscenario)
   - [包络图（envelopeMode）](#包络图envelopemode)
+  - [位移矢量箭头（arrow）](#位移矢量箭头arrow)
+  - [应力链（stressChainMode）](#应力链stresschainmode)
   - [切换动效（switchFx）](#切换动效switchfx)
   - [网络忙状态（networkBusy）](#网络忙状态networkbusy)
   - [双 msh（dualMeshName）](#双-mshdualmeshname)
@@ -82,6 +109,8 @@
     - [切换动效 switchFx](#切换动效-switchfx)
     - [网络忙状态](#网络忙状态)
     - [包络图 envelopeMode](#包络图-envelopemode)
+    - [位移矢量箭头 arrow](#位移矢量箭头-arrow)
+    - [应力链 stressChainMode](#应力链-stresschainmode)
     - [双 msh dualMeshName](#双-msh-dualmeshname)
     - [增量预演 damfScenario](#增量预演-damfscenario)
     - [Actor 控制](#actor-控制)
@@ -98,6 +127,7 @@ engine.getAllViewerState()                           // [proxy, proxy] Viewer �
 engine.getAllActorState(viewerId)                    // { [matId]: stateProxy }（仅 normal 材料）
 engine.getAllActorState(viewerId, 'measuring')       // { [name]: stateProxy }
 engine.getAllActorState(viewerId, 'eph')             // 切片 Eph 材料
+engine.getAllActorState(viewerId, 'forecast')        // damf 增量 forecast Actor（damfScenario 激活时）
 engine.getAllActorState(viewerId, 'dualMesh')        // 双 msh Actor（dualMeshName 已启用时）
 
 // 示例
@@ -105,7 +135,7 @@ engine.getAllActorState(viewerId)[matId].edge
 engine.getAllActorState(viewerId, 'measuring')['H01XH02'].show
 ```
 
-> **damfScenario 增量 forecast Actor**：与 normal 同结构 state（`show` / `grid` / `edge` / `opacity` …），目前未接入 `actor:state` 的 type 路由；需通过 `actorManager._forecast` 内部 Map 读写（后续可扩展 `type:'forecast'`）。
+> **`actor:global:state`**：未传 `type` 时同步 **normal + eph + forecast**；也可 `type: 'eph' | 'forecast' | 'normal'` 只打一层。
 
 ---
 
@@ -116,8 +146,8 @@ engine.getAllActorState(viewerId, 'measuring')['H01XH02'].show
 | `root:state` | 修改根状态 | payload 直接为字段 |
 | `viewer:state` | 修改单个 viewer | 需带 `viewerId` / `id` |
 | `viewer:global:state` | 多窗口同步修改 viewer | `id` 可选；不带则全部 |
-| `actor:state` | 修改单个 actor | 需 `viewerId` + `matId` / `actorid`；`type` 可选 `normal` / `eph` / `measuring` / `dualMesh` |
-| `actor:global:state` | 多窗口/单窗口全部 actor | `viewers`/`viewerId` 可选 |
+| `actor:state` | 修改单个 actor | 需 `viewerId` + `matId` / `actorid`；`type` 可选 `normal` / `eph` / `forecast` / `measuring` / `dualMesh` |
+| `actor:global:state` | 多窗口/单窗口全部 actor | `viewers`/`viewerId` 可选；未传 `type` 时写 normal+eph+forecast |
 
 ```js
 engine.event.emit(EVENTS.ROOT.STATE, { vCount: 1 })
@@ -187,7 +217,7 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 | `CELL_HIGHLIGHT` | `cellHighlight` | 单元高亮：`{ cellIds: number[] }` |
 | `CUT` | `cut` | 切片触发（常用 `Math.random()` 或回车） |
 | `SHOWCLIPPLANE` | `showClipPlane` | 材质裁剪开关 `bool` |
-| `SHOW_CLIP_PLANE_HELPER` | `showClipPlaneHelper` | 仅显示裁剪辅助面 `bool` |
+| `SHOW_CLIP_PLANE_HELPER` | `showClipPlaneHelper` | 裁剪辅助面 + 平移/旋转控件；悬停拾取到手柄即放大 |
 | `CLIP_PLANE_NORMAL` | `clipPlaneNormal` | 切片方向 |
 | `CLIP_PLANE_CONSTANT` | `clipPlaneConstant` | 切片位置 `(-1000, 1000)` |
 | `GRID` | `grid` | 全局网格线开关（默认 `false`） |
@@ -197,6 +227,20 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 | `DAMS` | `dams` | 边坡监测 dams id；空=关闭；加载 `{server}dams/{id}` → SlopeActor |
 | `SLOPE_LINE_WIDTH` | `slopeLineWidth` | SlopeActor 线宽（像素），默认 `3.5` |
 | `SLOPE_POINT_RADIUS` | `slopePointRadius` | SlopeActor 点球世界半径，默认 `0.8` |
+| `STRESS_CHAIN_MODE` | `stressChainMode` | 应力链模式；`true` 时自动 `rayMode=mesh`，Ctrl+左键点选生成单链（见下方专节） |
+| `STRESS_CHAIN_SEED` | `stressChainSeed` | 当前链种子 `{ vertexIndex?, vertexId?, axis?, hitPoint? }`；`null` = 无链 |
+| `STRESS_CHAIN_AXIS` | `stressChainAxis` | 主应力分量：`6`/`"p1"`、`7`/`"p2"`、`8`/`"p3"`（默认 `6`） |
+| `STRESS_CHAIN_SEED_POLICY` | `stressChainSeedPolicy` | 共用顶点时选种子单元：`nearHit`（默认）/ `maxAbs` |
+| `STRESS_CHAIN_SHOW_SHELL` | `stressChainShowShell` | 链壳显隐，默认 `true` |
+| `STRESS_CHAIN_SHOW_LINE` | `stressChainShowLine` | 中心线显隐，默认 `true` |
+| `STRESS_CHAIN_SHOW_ARROWS` | `stressChainShowArrows` | 方向箭头显隐，默认 `true` |
+| `STRESS_CHAIN_SHELL_OPACITY` | `stressChainShellOpacity` | 链壳透明度，默认 `0.85` |
+| `STRESS_CHAIN_LINE_WIDTH` | `stressChainLineWidth` | 中心线宽，默认 `2.5` |
+| `STRESS_CHAIN_ARROW_SCALE` | `stressChainArrowScale` | 箭头长度倍率，默认 `0.6` |
+| `STRESS_CHAIN_ARROW_OPACITY` | `stressChainArrowOpacity` | 箭头透明度，默认 `0.92` |
+| `STRESS_CHAIN_ARROW_COLOR` | `stressChainArrowColor` | 箭头颜色，默认 `"#000000"` |
+| `STRESS_CHAIN_MAX_CELLS` | `stressChainMaxCells` | 链最长单元数，默认 `200` |
+| `STRESS_CHAIN_ALIGN_COS` | `stressChainAlignCos` | 相邻单元主方向对齐阈值（余弦），默认 `0.5` |
 
 ### ACTOR
 
@@ -213,6 +257,12 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 | `SCENARIO_ID` | `scenarioId` | forecast 增量 Actor 专有：所属 damf scenario id（只读，由挂载写入） |
 | `USE_DEFAULT_COLOR` | `useDefaultColor` | 是否使用默认色 `bool` |
 | `DISP_COEF` | `dispCoef` | 变形系数 |
+| `ARROW` | `arrow` | 位移矢量箭头开关 `bool`（默认 `false`） |
+| `ARROW_MODE` | `arrowMode` | `resultant` 合力（默认）/ `xyz` 三轴 RGB 分显 |
+| `ARROW_SCALE` | `arrowScale` | 长度倍率（相对自适应参考长度，默认 `1`） |
+| `ARROW_ASPECT` | `arrowAspect` | 锥头底半径/头高（固定锥角，宜 `0.35~0.55`，默认 `0.45`） |
+| `ARROW_MIN_MAG` | `arrowMinMag` | 模长阈值，低于不画 |
+| `ARROW_STRIDE` | `arrowStride` | 顶点抽样步长 `>=1`，越大越稀 |
 | `MAT_STYLE` | `matStyle` | 显示材料：`normal` / `shader` |
 | `ISO_LINE_NUM` | `isoLineNum` | 等值线分段数，`0` 为关闭 |
 | `ISO_LINE_WIDTH` | `isoLineWidth` | 等值线线宽，默认 `1.5` |
@@ -252,6 +302,46 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 - 仅改 `envelopeMode` 会自动刷新云图；切换物理量时仍建议 bump `updateAttr`
 - `displacements`：写入 `updateDisp`，变形由 actor `dispCoef` 控制
 - 仅一个 attrVersion 也可算；若只有一个 step，则 min/max 相同
+
+---
+
+## 位移矢量箭头（arrow）
+
+对应 `字段定义.js` 的 `ACTOR.ARROW*`。在已加载 **`displacements`** 后，于顶点绘制杆 + 圆锥头矢量（不写深度，叠在模型上）。
+
+| 字段 | 默认 | 说明 |
+|------|------|------|
+| `arrow` | `false` | 开关 |
+| `arrowMode` | `"resultant"` | 合力一根 / `"xyz"` 三轴分显（X 红 Y 绿 Z 蓝） |
+| `arrowScale` | `1` | 最长箭头 ≈ 模型对角线 × 3% × scale |
+| `arrowAspect` | `0.45` | 锥头底半径 / 头高（头形固定，只拉长圆柱杆） |
+| `arrowMinMag` | `1e-8` | 模长阈值 |
+| `arrowStride` | `1` | 抽样步长，大模型建议 `4` 起 |
+
+适用范围：**normal** 主网格、**eph** 切片、**forecast** damf 增量。合力模式颜色跟顶点 `scalar`/LUT；三轴模式用固定 RGB。
+
+---
+
+## 应力链（stressChainMode）
+
+对应 `字段定义.js` / `state_viewer.js` 的 `VIEWER.STRESS_CHAIN_*`。在已加载 **`targetAttr: "stress"`**（9 分量）后，从种子顶点沿主应力方向走链，单独渲染一条链（覆盖，不同时显示多条）。
+
+| 字段 | 默认 | 说明 |
+|------|------|------|
+| `stressChainMode` | `false` | 开：自动切 `rayMode=mesh`；关：恢复之前的 rayMode 并清链 |
+| `stressChainSeed` | `null` | 由 Ctrl+左键写入；也可手动设 `{ vertexIndex }` 或 `{ vertexId }` |
+| `stressChainAxis` | `6` | `p1`/`p2`/`p3`（6/7/8）；改轴会用同一种子重算 |
+| `stressChainSeedPolicy` | `"nearHit"` | 顶点被多单元共用时：距拾取点最近 / `\|σ\|` 最大 |
+| `stressChainMaxCells` | `200` | 链最长单元数 |
+| `stressChainAlignCos` | `0.5` | 相邻单元主方向夹角余弦下限，越小越容易拐弯 |
+
+交互：
+
+- **Ctrl+左键**点选 **normal** 或 **forecast** 表面顶点（切片 / 应力链自身不作为种子）
+- 开启后普通 actor 透明度会压到约 `0.1`，便于看链
+- 箭头不写深度；端点为屏幕固定大小的圆点（白=种子，另一端着色）
+
+数据：旁路 WS **`GET_STRESS_CHAIN`**，二进制不入 cache。改 `targetAttr` / 版本 / step 时若模式仍开，会按当前种子刷新。
 
 ---
 
@@ -307,7 +397,7 @@ root.switchFx = { meshName: true, drawRange: false, attr: false }
 |------|------|
 | `ws` | `Net.sendQuery`（attr / envelope / topo / cut…） |
 | `damf` | damf 加载 + 挂载整段 |
-| `http.damb` | `allMesh` / `forecast` 的 damb |
+| `http.damb` | `allMesh` / `forecast` / 双 msh 的 damb |
 | `http.meshVersions` | mesh 切换拉版本列表 |
 | `http.forecast` / `http.forecast.warm` | 单独拉 damf / 预热（未被外层 `damf` 包住时） |
 
@@ -346,7 +436,7 @@ engine.event.off('net:busy', onBusy)
 | `dualMeshName: null` / `""` | 关闭 dual；**保持**当前 `meshName`，按 normal 重载 |
 | Actor 读写 | `getAllActorState(viewerId, 'dualMesh')`；`actor:state` 可带 `type:'dualMesh'` |
 
-第二层材质号相对原始材料号有偏移（`DUAL_MESH_MAT_OFFSET = 100000`），与后端 `DualMeshMaterialOffset` 一致。
+第二层材质号相对原始材料号有偏移（`DUAL_MESH_MAT_OFFSET = 10000`），与后端 `DualMeshMaterialOffset` 一致。几何来自 **`GET {server}damb/{meshName}`**（单 dim，`matId >= 10000` 为第二层），不再走 WS 拉双 msh 拓扑。
 
 ---
 
@@ -635,6 +725,73 @@ engine.event.emit("actor:global:state", {
 })
 ```
 
+### 位移矢量箭头 arrow
+
+先加载位移，再开箭头（未传 `type` 时 normal / eph / forecast 一起开）：
+
+```js
+const viewerId = engine.getAllViewerState()[0].id
+
+engine.event.emit("viewer:state", {
+  viewerId,
+  state: {
+    targetAttr: "displacements",
+    targetAxis: 3,
+    updateAttr: Date.now(),
+  },
+})
+
+engine.event.emit("actor:global:state", {
+  viewerId,
+  state: {
+    arrow: true,
+    arrowMode: "resultant", // 或 "xyz"
+    arrowScale: 1,
+    arrowAspect: 0.45,
+    arrowStride: 4,
+  },
+})
+
+// 只开某一层：type: "normal" | "eph" | "forecast"
+// engine.event.emit("actor:global:state", {
+//   viewerId, type: "eph", state: { arrow: true, arrowStride: 2 },
+// })
+```
+
+### 应力链 stressChainMode
+
+先切到应力场，再开模式；**Ctrl+左键**点选生成链：
+
+```js
+const viewerId = engine.getAllViewerState()[0].id
+
+engine.event.emit("viewer:state", {
+  viewerId,
+  state: {
+    targetAttr: "stress",
+    targetAxis: 6, // 云图轴；链用 stressChainAxis
+    updateAttr: Date.now(),
+    stressChainMode: true,
+    stressChainAxis: 6, // p1；7=p2，8=p3
+    stressChainSeedPolicy: "nearHit", // 或 "maxAbs"
+    stressChainShowArrows: true,
+    stressChainMaxCells: 200,
+  },
+})
+
+// 关闭（清链，恢复原先 rayMode）
+engine.event.emit("viewer:state", {
+  viewerId,
+  state: { stressChainMode: false, stressChainSeed: null },
+})
+
+// 不拾取、直接指定种子
+engine.event.emit("viewer:state", {
+  viewerId,
+  state: { stressChainSeed: { vertexIndex: 1234, axis: 6 } },
+})
+```
+
 ### 双 msh dualMeshName
 
 ```js
@@ -704,7 +861,7 @@ engine.event.emit("actor:global:state", {
 
 // 法线材料
 engine.event.emit("actor:global:state", {
-  viewerId: "kek02-YfADpTQQZHC5LzI",
+  viewerId: engine.getAllViewerState()[0].id,
   state: { matStyle: "normal" },
 })
 

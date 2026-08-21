@@ -4,6 +4,16 @@
 
 ## ChangeLog
 
+### 2026-08-21
+
+- 新增 ROOT 字段 `switchFxSpeed`：切换动效播放倍速（`1`=原速，`2`=两倍快）；faceFly / mesh 扫光 / 颜色淡入按时长 `/speed` 缩放
+- 时间轴连续播放共用该倍速：帧间隔 `intervalMs / speed`；`engine.timeline('setPlaySpeed', 2)` 播放中可改；内置面板 / dock 可选 `0.5x / 1x / 2x / 4x`
+
+### 2026-08-20
+
+- 补充 **时间轴播放** API 文档：`engine.timeline(...)` / session 封装；与单点时间序列（`series` 侧文件）无关
+- 补充时间轴 **进度与切换动效**：`onChange` 触发时机、`playhead` 语义、动效 await 后再进下一帧
+
 ### 2026-08-17
 
 - 剖切辅助面控件整体加大；鼠标悬停拾取到手柄即放大，点击后不再二次放大（旋转环按轴放大，避免位移跑偏）
@@ -67,6 +77,7 @@
 
 - [DamViewer Stream — State \& Event API](#damviewer-stream--state--event-api)
   - [ChangeLog](#changelog)
+    - [2026-08-20](#2026-08-20)
     - [2026-08-17](#2026-08-17)
     - [2026-08-10](#2026-08-10)
     - [2026-08-04](#2026-08-04)
@@ -91,6 +102,7 @@
   - [切换动效（switchFx）](#切换动效switchfx)
   - [网络忙状态（networkBusy）](#网络忙状态networkbusy)
   - [双 msh（dualMeshName）](#双-mshdualmeshname)
+  - [时间轴播放（timeline）](#时间轴播放timeline)
   - [Event 事件](#event-事件)
     - [ROOT](#root-1)
     - [NET](#net)
@@ -112,6 +124,7 @@
     - [位移矢量箭头 arrow](#位移矢量箭头-arrow)
     - [应力链 stressChainMode](#应力链-stresschainmode)
     - [双 msh dualMeshName](#双-msh-dualmeshname)
+    - [时间轴播放 timeline](#时间轴播放-timeline)
     - [增量预演 damfScenario](#增量预演-damfscenario)
     - [Actor 控制](#actor-控制)
     - [全坝段线框显隐](#全坝段线框显隐)
@@ -176,6 +189,7 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 | `NETWORK_ACTIVE` | `networkActive` | 在途任务数 |
 | `NETWORK_BY_KIND` | `networkByKind` | 按 kind 计数，如 `{ ws: 2, damf: 1 }` |
 | `SWITCH_FX` | `switchFx` | 三种切换动效总开关（见下方专节） |
+| `SWITCH_FX_SPEED` | `switchFxSpeed` | 切换动效 / 时间轴播放倍速，默认 `1`（见下方专节） |
 
 ### VIEWER
 
@@ -241,6 +255,12 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 | `STRESS_CHAIN_ARROW_COLOR` | `stressChainArrowColor` | 箭头颜色，默认 `"#000000"` |
 | `STRESS_CHAIN_MAX_CELLS` | `stressChainMaxCells` | 链最长单元数，默认 `200` |
 | `STRESS_CHAIN_ALIGN_COS` | `stressChainAlignCos` | 相邻单元主方向对齐阈值（余弦），默认 `0.5` |
+| `TIMELINE_MODE` | `timelineMode` | 时间轴：`"off"` / `"on"`（由 `engine.timeline` 写入，见下方专节） |
+| `TIMELINE_PLAYHEAD` | `timelinePlayhead` | 当前帧下标 |
+| `TIMELINE_BUFFER_RATIO` | `timelineBufferRatio` | 已缓冲帧比例 `0–1` |
+| `TIMELINE_PLAYING` | `timelinePlaying` | 是否正在播放 |
+| `TIMELINE_REBUFFERING` | `timelineRebuffering` | 是否因缺缓存而等待补缓冲 |
+| `TIMELINE_PLAY_SPEED` | `timelinePlaySpeed` | 播放倍速，与 `root.switchFxSpeed` 同步 |
 
 ### ACTOR
 
@@ -387,6 +407,28 @@ const root = engine.getRootState()
 root.switchFx = { meshName: true, drawRange: false, attr: false }
 ```
 
+### 播放倍速（switchFxSpeed）
+
+挂在 **引擎根**（`root.state.switchFxSpeed`），默认 `1`。合法范围约 `0.25–8`。
+
+会同时缩短：
+
+- actor 切换动效时长（faceFly / mesh 扫光 / 颜色交叉淡入）
+- 时间轴两帧之间的停留（`intervalMs / speed`）
+
+`2` 即整体大约两倍速。当前正在播的那一段动效不会中途加速，从下一帧开始按新倍速走。
+
+```js
+new DamViewer({ switchFxSpeed: 2 })
+
+engine.event.emit("root:state", { switchFxSpeed: 2 })
+
+const root = engine.getRootState()
+root.switchFxSpeed = 2
+```
+
+时间轴侧也可用 `playSpeed` / `setPlaySpeed`（写入同一字段，见下方「时间轴播放」）。
+
 ---
 
 ## 网络忙状态（networkBusy）
@@ -437,6 +479,178 @@ engine.event.off('net:busy', onBusy)
 | Actor 读写 | `getAllActorState(viewerId, 'dualMesh')`；`actor:state` 可带 `type:'dualMesh'` |
 
 第二层材质号相对原始材料号有偏移（`DUAL_MESH_MAT_OFFSET = 10000`），与后端 `DualMeshMaterialOffset` 一致。几何来自 **`GET {server}damb/{meshName}`**（单 dim，`matId >= 10000` 为第二层），不再走 WS 拉双 msh 拓扑。
+
+---
+
+## 时间轴播放（timeline）
+
+按结果版本 / 时间步序列静默预取场数据，再按帧切换云图。**与单点历史曲线无关**（单点走后端 `series` 侧文件 / `GetAttrMultyOnePoint`）。
+
+数据路径：前端 `requestAttr` 拉整场 `fields` + WS **`START_ATTR_WARM` / `CANCEL_ATTR_WARM`** 后端预热（与普通 PrefetchNext 分离）。
+
+### 入口
+
+```js
+// 默认第一个 viewer；也可 engine.timeline(viewerId, 'configure', opts)
+engine.timeline('configure', opts)
+engine.timeline('start')
+engine.timeline('play')
+engine.timeline('pause')
+engine.timeline('seek', index)
+engine.timeline('stop')
+engine.timeline('status')
+engine.timeline('setPlaySpeed', 2)
+engine.timeline('reconfigure', partial)
+engine.timeline('switchAttr', partial)
+engine.timeline('switchFrames', frames, extra?)
+```
+
+内置壳 / session 封装同名：`session.timelineConfigure` / `timelinePlay` / `timelineStatus` 等（`logs` 默认用 `session.attrCatalog.logs`）。
+
+### 帧契约
+
+播放顺序以显式 `frames[]` 为准。每帧：
+
+| 字段 | 说明 |
+|------|------|
+| `attrVersion` | 结果版本（亦可用 `version` / `versionTs`） |
+| `meshVersion` | 浇筑版本；缺省时回退为 `attrVersion` |
+| `attrName` | 物理量名 |
+| `step` | 时间步字符串，默认 `"1"` |
+| `axis` | 分量轴，默认 `0` |
+
+### configure
+
+两种装载方式（二选一优先）：
+
+1. **显式 `frames[]`**（推荐业务自建序列时用）
+2. **`logs` + 起止版本** → 按 catalog 展开（版本升序 → attr → step）
+
+| 参数 | 说明 |
+|------|------|
+| `frames` | 显式帧数组；有则忽略区间展开 |
+| `logs` | `attr_import_log` 列表（含 `versionTs` / `meshVersion` / `attrs` / `steps`） |
+| `startAttrVersion` / `endAttrVersion` | 结果版本闭区间 |
+| `startMeshVersion` / `endMeshVersion` | 可选浇筑区间约束 |
+| `attrName` / `attrNames` | 物理量；不传则用当前 `targetAttr`；catalog 展开时 `attrNames` 空 = 该版本全部 attr |
+| `step` / `steps` | 限制时间步；**都不传** = 各版本 `log.steps` 全部（无则 `['1']`） |
+| `axis` / `axisByAttr` | 默认轴；可按物理量覆盖 |
+| `intervalMs` | 帧间隔，默认 `400`（**切换动效结束之后**再等这么久才进下一帧；实际等待为 `intervalMs / switchFxSpeed`） |
+| `playSpeed` / `switchFxSpeed` | 播放倍速，默认跟 `root.switchFxSpeed`（`1`）；写入根状态，动效时长与帧间隔一起缩放 |
+| `onChange` | `(status) => void`；**不是**整段播完才调，见下方「进度与切换动效」 |
+
+典型流程：`configure` → `start`（开预取 + warm）→ `play`。
+
+### 其它方法
+
+| 方法 | 行为 |
+|------|------|
+| `start` | `mode=on`，从当前 playhead 开 warm + 前端预取；不自动播 |
+| `play` / `pause` | 播放 / 暂停；未 `start` 时 `play` 会先 `start` |
+| `seek(i)` | 跳到下标 `i`；停旧 warm，从该帧重开预热 |
+| `stop` | 退出时间轴，`CANCEL_ATTR_WARM`；普通 PrefetchNext 不动 |
+| `switchAttr` | 保留上次区间/logs，换物理量或 step，从 0 重开 |
+| `switchFrames` | 整表替换 `frames[]` |
+| `reconfigure` | 合并上次 `configure` 参数再重建（改间隔不会把倍速打回装载时的值） |
+| `status` | 见下表 |
+| `setPlaySpeed(n)` | 播放中改倍速；立刻影响下一帧间隔和后续动效时长 |
+
+### status 快照
+
+| 字段 | 说明 |
+|------|------|
+| `mode` | `"off"` / `"on"` |
+| `playing` / `rebuffering` | 播放中 / 补缓冲中 |
+| `playhead` / `frameCount` | 当前帧下标 / 总帧数（语义见下） |
+| `bufferRatio` / `bufferEnd` | 已缓冲比例 / 从 playhead 起连续已缓存到哪 |
+| `intervalMs` / `playSpeed` / `activeAttr` / `ticks` | 间隔、倍速、当前物理量、每帧相对上一帧的刻度类型（`mesh`/`attr`/`step`） |
+
+Viewer 上同步写入 `timelineMode` / `timelinePlayhead` / `timelineBufferRatio` / `timelinePlaying` / `timelineRebuffering` / `timelinePlaySpeed`，可 `watch` 刷 UI。
+
+### 进度与切换动效
+
+**`onChange` 触发时机**（每次 `syncViewerState`）：
+
+- `configure` / `start` / `stop` / `play` / `pause` / `seek`
+- 每一帧前进（`playhead` 变化）
+- 进入 / 退出 `rebuffering`
+- 预取推进刷新 `bufferRatio`
+
+不是「整段动画播完才回调」。用来刷进度条看 `st.playhead`、`st.bufferRatio`、`st.playing`、`st.rebuffering` 即可。
+
+**单帧内部顺序**（`play` 时）：
+
+1. 对当前 `playhead` 做 `applyFrame`（拉场 + `await getScalarData`）
+2. `getScalarData` 内会 `await` 切换动效：先等 faceFly / mesh 扫光，再等颜色交叉淡入（`attrSwitchPhase`: `loading` → `fading` → `idle`）
+3. 动效结束后才 `playhead += 1`，再 `onChange`
+4. 再等 `intervalMs / switchFxSpeed` 才播下一帧
+
+因此：
+
+- **不必**自己「等切换动画结束再 seek 下一帧」；`timeline('play')` 已串好
+- `onChange` 里的 `playhead` 多数是「下一帧下标」；刚播完的那一帧是 `playhead - 1`（末帧会 `pause`，停在最后一帧）
+- 整段播完：`!st.playing && st.playhead >= st.frameCount - 1 && st.frameCount > 0`
+
+若只关心切换动效阶段（loading 提示，不是帧进度），可 watch viewer：
+
+```js
+viewer.watch({
+  stateHandlers: {
+    attrSwitchPhase: (phase) => { /* 'idle' | 'loading' | 'fading' */ },
+    meshSwitchPhase: (phase) => { /* 扫光阶段 */ },
+  },
+})
+```
+
+### 内置面板
+
+壳子「时间轴播放」：选物理量与起止结果版本 → **装载缓冲** → **▶**。对应 `bind-ui.js` 的 `armTimelineFromUi`。面板与底部 dock 可选播放倍速 `0.5x / 1x / 2x / 4x`（设置里「切换动效 → 动效倍速」是同一字段）。
+
+### 示例
+
+```js
+// A. catalog 区间（与内置 UI 类似）
+engine.timeline('configure', {
+  logs: attrCatalog.logs,
+  startAttrVersion: 1787103918453,
+  endAttrVersion: 1787109316702,
+  attrName: 'displacements',
+  // steps: ['1'],   // 不传 = 各版本全部 step
+  axis: 0,
+  intervalMs: 400,
+  playSpeed: 2,
+  onChange: (st) => { /* 刷新进度条 */ },
+})
+engine.timeline('start')
+engine.timeline('play')
+
+// B. 显式帧
+engine.timeline('configure', {
+  frames: [
+    { meshVersion: 1787103918453, attrVersion: 1787103918453, attrName: 'temperature', step: '1', axis: 0 },
+    { meshVersion: 1787103918453, attrVersion: 1787103918453, attrName: 'temperature', step: '2', axis: 0 },
+  ],
+  intervalMs: 400,
+})
+engine.timeline('start')
+engine.timeline('play')
+
+engine.timeline('setPlaySpeed', 2)
+engine.timeline('seek', 3)
+engine.timeline('switchAttr', { attrName: 'stress', step: '1' })
+engine.timeline('pause')
+engine.timeline('stop')
+
+const st = engine.timeline('status')
+// st.mode / st.playing / st.playhead / st.frameCount / st.bufferRatio / st.rebuffering / st.playSpeed
+```
+
+注意：
+
+- 需已加载工程且有 attr catalog（或自建 `frames`）
+- 缓存不够会进入 `rebuffering`，缓冲够后再继续播
+- `stop` 只取消播模式 warm，不影响其它预取
+- 切换动效由时间轴内部 await，业务侧用 `play()` 即可；想加快用 `switchFxSpeed` / `setPlaySpeed`，或关 `switchFx` / 减小 `intervalMs`
 
 ---
 
@@ -669,6 +883,10 @@ engine.event.emit("root:state", {
 
 // 全部瞬时切换（无动效）
 engine.event.emit("root:state", { switchFx: false })
+
+// 两倍速（动效仍开，时长减半；时间轴帧间隔同步减半）
+engine.event.emit("root:state", { switchFxSpeed: 2 })
+engine.timeline('setPlaySpeed', 2)
 ```
 
 ### 网络忙状态
@@ -817,6 +1035,28 @@ engine.event.emit("actor:state", {
 })
 ```
 
+### 时间轴播放 timeline
+
+```js
+// 装载 → 预热 → 播放（详见上方「时间轴播放」专节）
+engine.timeline('configure', {
+  logs: attrCatalog.logs,
+  startAttrVersion: startVer,
+  endAttrVersion: endVer,
+  attrName: 'temperature',
+  intervalMs: 400,
+  playSpeed: 2,
+  onChange: (st) => console.log(st.playhead, st.bufferRatio, st.playSpeed),
+})
+engine.timeline('start')
+engine.timeline('play')
+
+engine.timeline('setPlaySpeed', 4)
+engine.timeline('seek', 2)
+engine.timeline('switchAttr', { attrName: 'stress' })
+engine.timeline('stop')
+```
+
 ### 增量预演 damfScenario
 
 ```js
@@ -912,6 +1152,7 @@ const defaultConfig = {
   wsUrl: "ws://sky.leve.vip:8888/jl_ws/",
   server: "http://sky.leve.vip:3000/",
   meshName: "test3",
+  switchFxSpeed: 1,
   camPos: { x: 315.63, y: 284.78, z: 247.46 },
   camTarget: { x: 40.15, y: -3.32, z: 124.10 },
 }

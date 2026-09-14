@@ -6,7 +6,7 @@
 
 ### 2026-09-14
 
-- 补全边坡监测文档：`dams` 加载时自动带入默认地形（`DEFAULT_TERRAIN_ID`，当前 `123`），关闭 `dams` 一并卸地形
+- 补全边坡监测文档：`dams` 加载时自动带入默认地形（`DEFAULT_TERRAIN_ID`，当前 `xld`），关闭 `dams` 一并卸地形
 - 补充 VIEWER 字段 `slopeFocus` / `slopeLoadPhase` / `slopeAttrs` / `slopeSteps` / `slopePointColorJc|Bd|Other`
 - 地形与监测模型互斥显示；看地形时相机相对地面不低于 25°、禁止右键平移
 - 普通网格几何改为 HTTP 优先：`GET verticesFile` / `GET topoFile`，失败再回退 WS `GET_VERTICES` / `GET_*`
@@ -254,7 +254,7 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 | `USE_DEFAULT_COLOR` | `useDefaultColor` | viewer 级默认色，统一下发到各 actor |
 | `MEASURING` | `measuring` | 测点数据 `Point[]` 或 `{ config?, measuring:[] }`；显隐/透明度走 `actorManager(type=measuring)` |
 | `DAMS` | `dams` | 边坡监测 dams id；空=关闭；加载 `{server}dams/{id}` → SlopeActor，并自动写入默认地形 |
-| `TERRAIN` | `terrain` | 地形 TIN id；空=关闭；加载 `{server}terrain/{id}` → TerrainActor。加载 `dams` 时自动写成默认值 `123` |
+| `TERRAIN` | `terrain` | 地形 TIN / GLB id；空=关闭；加载 `{server}terrain/{id}` → TerrainActor。加载 `dams` 时自动写成默认值 `xld`（`dvServer/terrain/xld.glb`） |
 | `SLOPE_LINE_WIDTH` | `slopeLineWidth` | SlopeActor 线宽（像素），默认 `3.5` |
 | `SLOPE_POINT_RADIUS` | `slopePointRadius` | SlopeActor 点球世界半径，默认 `0.8` |
 | `SLOPE_POINT_COLOR_JC` | `slopePointColorJc` | JC 点球颜色，默认 `#ffffff` |
@@ -395,7 +395,7 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 | 字段 | 默认 | 说明 |
 |------|------|------|
 | `dams` | `""` | 监测 id；空=关闭并卸默认地形 |
-| `terrain` | `""` | 地形 id；加载 `dams` 时自动写成 `123`（`DEFAULT_TERRAIN_ID`），也可单独设 |
+| `terrain` | `""` | 地形 id；加载 `dams` 时自动写成 `xld`（`DEFAULT_TERRAIN_ID`），也可单独设 |
 | `slopeLineWidth` | `3.5` | 测线像素宽 |
 | `slopePointRadius` | `0.8` | 点球世界半径 |
 | `slopePointColorJc` | `"#ffffff"` | id 以 `JC` 开头的点球 |
@@ -971,12 +971,12 @@ engine.event.emit("viewer:state", {
 
 ### 地形表面 terrain / TerrainActor
 
-可单独加载，不进材料列表。加载 `dams` 时引擎会自动写成默认 id `123`，一般不必再填。DWG 先由 `tools/terrain-from-dwg` 去掉文字/符号块，等高线补成 TIN，写出 `.damt`。
+可单独加载，不进材料列表。加载 `dams` 时引擎会自动写成默认 id `xld`（`dvServer/terrain/xld.glb`），一般不必再填。DWG 先由 `tools/terrain-from-dwg` 去掉文字/符号块，等高线补成 TIN，写出 `.damt`。
 
 ```js
 engine.event.emit("viewer:state", {
   viewerId: "<viewerId>",
-  state: { terrain: "123" },
+  state: { terrain: "xld" },
 })
 // 关闭（若此时仍开着 dams，下次同步会再写回默认地形）
 engine.event.emit("viewer:state", {

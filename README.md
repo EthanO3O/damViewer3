@@ -4,6 +4,17 @@
 
 ## ChangeLog
 
+### 2026-09-14
+
+- 补全边坡监测文档：`dams` 加载时自动带入默认地形（`DEFAULT_TERRAIN_ID`，当前 `123`），关闭 `dams` 一并卸地形
+- 补充 VIEWER 字段 `slopeFocus` / `slopeLoadPhase` / `slopeAttrs` / `slopeSteps` / `slopePointColorJc|Bd|Other`
+- 地形与监测模型互斥显示；看地形时相机相对地面不低于 25°、禁止右键平移
+- 普通网格几何改为 HTTP 优先：`GET verticesFile` / `GET topoFile`，失败再回退 WS `GET_VERTICES` / `GET_*`
+
+### 2026-09-07
+
+- 新增独立地形 TIN：`tools/terrain-from-dwg` 把 DWG 等高线（去掉文字/符号块）转成 `.damt`；VIEWER 字段 `terrain` 加载 `{server}terrain/{id}` → **TerrainActor**（高程着色，不走有限元）
+
 ### 2026-08-21
 
 - 新增 ROOT 字段 `switchFxSpeed`：切换动效播放倍速（`1`=原速，`2`=两倍快）；faceFly / mesh 扫光 / 颜色淡入按时长 `/speed` 缩放
@@ -77,6 +88,9 @@
 
 - [DamViewer Stream — State \& Event API](#damviewer-stream--state--event-api)
   - [ChangeLog](#changelog)
+    - [2026-09-14](#2026-09-14)
+    - [2026-09-07](#2026-09-07)
+    - [2026-08-21](#2026-08-21)
     - [2026-08-20](#2026-08-20)
     - [2026-08-17](#2026-08-17)
     - [2026-08-10](#2026-08-10)
@@ -99,6 +113,7 @@
   - [包络图（envelopeMode）](#包络图envelopemode)
   - [位移矢量箭头（arrow）](#位移矢量箭头arrow)
   - [应力链（stressChainMode）](#应力链stresschainmode)
+  - [边坡监测（dams / SlopeActor）](#边坡监测dams--slopeactor)
   - [切换动效（switchFx）](#切换动效switchfx)
   - [网络忙状态（networkBusy）](#网络忙状态networkbusy)
   - [双 msh（dualMeshName）](#双-mshdualmeshname)
@@ -238,9 +253,17 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 | `OPACITY` | `opacity` | viewer 级透明度 `0–1`，统一下发到各 actor |
 | `USE_DEFAULT_COLOR` | `useDefaultColor` | viewer 级默认色，统一下发到各 actor |
 | `MEASURING` | `measuring` | 测点数据 `Point[]` 或 `{ config?, measuring:[] }`；显隐/透明度走 `actorManager(type=measuring)` |
-| `DAMS` | `dams` | 边坡监测 dams id；空=关闭；加载 `{server}dams/{id}` → SlopeActor |
+| `DAMS` | `dams` | 边坡监测 dams id；空=关闭；加载 `{server}dams/{id}` → SlopeActor，并自动写入默认地形 |
+| `TERRAIN` | `terrain` | 地形 TIN id；空=关闭；加载 `{server}terrain/{id}` → TerrainActor。加载 `dams` 时自动写成默认值 `123` |
 | `SLOPE_LINE_WIDTH` | `slopeLineWidth` | SlopeActor 线宽（像素），默认 `3.5` |
 | `SLOPE_POINT_RADIUS` | `slopePointRadius` | SlopeActor 点球世界半径，默认 `0.8` |
+| `SLOPE_POINT_COLOR_JC` | `slopePointColorJc` | JC 点球颜色，默认 `#ffffff` |
+| `SLOPE_POINT_COLOR_BD` | `slopePointColorBd` | BD / GD 点球颜色，默认 `#111111` |
+| `SLOPE_POINT_COLOR_OTHER` | `slopePointColorOther` | 其它点球颜色，默认 `#555555` |
+| `SLOPE_ATTRS` | `slopeAttrs` | 只读：挂载后由引擎写入的 `.dams` 物理量名列表，供 UI 下拉 |
+| `SLOPE_STEPS` | `slopeSteps` | 只读：挂载后由引擎写入的 `.dams` 时间步列表，供 UI 下拉 |
+| `SLOPE_FOCUS` | `slopeFocus` | 地形 / 监测互斥：`false`=地形+菱形标点；`true`=监测模型（隐藏地形） |
+| `SLOPE_LOAD_PHASE` | `slopeLoadPhase` | 只读：`idle` / `loading` — dams / 地形文件请求中 |
 | `STRESS_CHAIN_MODE` | `stressChainMode` | 应力链模式；`true` 时自动 `rayMode=mesh`，Ctrl+左键点选生成单链（见下方专节） |
 | `STRESS_CHAIN_SEED` | `stressChainSeed` | 当前链种子 `{ vertexIndex?, vertexId?, axis?, hitPoint? }`；`null` = 无链 |
 | `STRESS_CHAIN_AXIS` | `stressChainAxis` | 主应力分量：`6`/`"p1"`、`7`/`"p2"`、`8`/`"p3"`（默认 `6`） |
@@ -365,6 +388,71 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 
 ---
 
+## 边坡监测（dams / SlopeActor）
+
+对应 `字段定义.js` / `state_viewer.js` 的 `VIEWER.DAMS` / `SLOPE_*` / `TERRAIN`。加载 `{server}dams/{id}` → **SlopeActor**（粗线 `LineSegments2` + 分类点球），并自动带入默认地形。
+
+| 字段 | 默认 | 说明 |
+|------|------|------|
+| `dams` | `""` | 监测 id；空=关闭并卸默认地形 |
+| `terrain` | `""` | 地形 id；加载 `dams` 时自动写成 `123`（`DEFAULT_TERRAIN_ID`），也可单独设 |
+| `slopeLineWidth` | `3.5` | 测线像素宽 |
+| `slopePointRadius` | `0.8` | 点球世界半径 |
+| `slopePointColorJc` | `"#ffffff"` | id 以 `JC` 开头的点球 |
+| `slopePointColorBd` | `"#111111"` | id 以 `BD` / `GD` 开头的点球 |
+| `slopePointColorOther` | `"#555555"` | 其余点球 |
+| `slopeFocus` | `false` | `false`=显示地形（菱形标点）；`true`=显示监测模型并隐藏地形 |
+| `slopeAttrs` | `[]` | 挂载后由引擎写入，勿手改 |
+| `slopeSteps` | `[]` | 挂载后由引擎写入，勿手改 |
+| `slopeLoadPhase` | `"idle"` | `idle` / `loading`，由引擎写入 |
+
+行为：
+
+- 测线颜色走 Actor LUT（深蓝→深红），attr 名取自 `.dams` / `data.yml` 表头；切场仍要 `updateAttr`
+- 加载 `dams` 时强制 `slopeFocus = false`（先看地形）；关闭 `dams` 时把 `terrain` 清成空并卸 SlopeActor
+- 地形与监测同时在场时互斥：点地形上的菱形标点会把 `slopeFocus` 置 `true`；画布右上角按钮可来回切
+- **看地形时**相机相对地面不低于 25°、禁止右键平移；切到监测模型或关闭后还原
+- 测点网中心会贴到地形 GLB 里的 slope/anchor 三角中心（坐标系不同）
+
+门槛：`viewerReady`（有 `viewerId` 即可，不依赖有限元材料）。
+
+```js
+engine.event.emit("viewer:state", {
+  viewerId: "<viewerId>",
+  state: {
+    dams: "xiluodu-meas",
+    slopeLineWidth: 3.5,
+    slopePointRadius: 0.8,
+    slopePointColorJc: "#ffffff",
+    slopePointColorBd: "#111111",
+    slopePointColorOther: "#555555",
+    slopeFocus: false, // true=显示监测模型并隐藏地形
+    targetAttr: "目标位移测值(mm)",
+    targetStep: "2026-07-01 11:00:00",
+    updateAttr: Math.random(),
+  },
+})
+
+// 只读目录（挂载后）
+const viewer = engine.getAllViewerState().find((v) => v.id === "<viewerId>")
+viewer.slopeAttrs  // 物理量名
+viewer.slopeSteps  // 时间步
+
+// 切到监测模型
+engine.event.emit("viewer:state", {
+  viewerId: "<viewerId>",
+  state: { slopeFocus: true },
+})
+
+// 关闭监测并卸默认地形
+engine.event.emit("viewer:state", {
+  viewerId: "<viewerId>",
+  state: { dams: "" },
+})
+```
+
+---
+
 ## 切换动效（switchFx）
 
 挂在 **引擎根**（`root.state.switchFx`），默认全开：
@@ -440,6 +528,8 @@ root.switchFxSpeed = 2
 | `ws` | `Net.sendQuery`（attr / envelope / topo / cut…） |
 | `damf` | damf 加载 + 挂载整段 |
 | `http.damb` | `allMesh` / `forecast` / 双 msh 的 damb |
+| `http.mesh` | 普通网格 `verticesFile` / `topoFile` |
+| `http.attr` | 物理量 `attrFile` |
 | `http.meshVersions` | mesh 切换拉版本列表 |
 | `http.forecast` / `http.forecast.warm` | 单独拉 damf / 预热（未被外层 `damf` 包住时） |
 
@@ -854,22 +944,44 @@ engine.event.emit("viewer:state", {
 
 ### 边坡监测 dams / SlopeActor
 
+详见上方专节。加载 `.dams` 会自动带入默认地形；关闭 `dams` 一并卸地形。
+
 ```js
 engine.event.emit("viewer:state", {
   viewerId: "<viewerId>",
   state: {
     dams: "xiluodu-meas",
-    slopeLineWidth: 3.5, //线宽
-    slopePointRadius: 0.8, //点大小
+    slopeLineWidth: 3.5,
+    slopePointRadius: 0.8,
+    slopePointColorJc: "#ffffff",
+    slopePointColorBd: "#111111",
+    slopePointColorOther: "#555555",
+    slopeFocus: false, // true=显示监测模型并隐藏地形
     targetAttr: "目标位移测值(mm)",
     targetStep: "2026-07-01 11:00:00",
     updateAttr: Math.random(),
   },
 })
-// 关闭
+// 关闭监测并卸默认地形
 engine.event.emit("viewer:state", {
   viewerId: "<viewerId>",
   state: { dams: "" },
+})
+```
+
+### 地形表面 terrain / TerrainActor
+
+可单独加载，不进材料列表。加载 `dams` 时引擎会自动写成默认 id `123`，一般不必再填。DWG 先由 `tools/terrain-from-dwg` 去掉文字/符号块，等高线补成 TIN，写出 `.damt`。
+
+```js
+engine.event.emit("viewer:state", {
+  viewerId: "<viewerId>",
+  state: { terrain: "123" },
+})
+// 关闭（若此时仍开着 dams，下次同步会再写回默认地形）
+engine.event.emit("viewer:state", {
+  viewerId: "<viewerId>",
+  state: { terrain: "" },
 })
 ```
 

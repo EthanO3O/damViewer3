@@ -1,1275 +1,628 @@
-# DamViewer Stream — State & Event API
+# dvServer
 
-基于 `字段定义.js` 的状态字段与事件接口说明。通过 `engine.event.emit` 修改状态；State 用 `proxy.watch` / `unwatch`，Event 用 `event.on` / `off`（或 `event.watch` / `unwatch`）监听与取消。
+大坝网格 / 属性可视化后端。提供网格上传（attrstore / damb）、forecast（damf）导出、测点（dams）导出、DXF 剖面叠图。
 
-## ChangeLog
+## 配置文件
 
-### 2026-09-14
+启动时通过 `-config` 指定 JSON 配置（默认 `config.json`）：
 
-- 补全边坡监测文档：`dams` 加载时自动带入默认地形（`DEFAULT_TERRAIN_ID`，当前 `xld`），关闭 `dams` 一并卸地形
-- 补充 VIEWER 字段 `slopeFocus` / `slopeLoadPhase` / `slopeAttrs` / `slopeSteps` / `slopePointColorJc|Bd|Other`
-- 地形与监测模型互斥显示；看地形时相机相对地面不低于 25°、禁止右键平移
-- 普通网格几何改为 HTTP 优先：`GET verticesFile` / `GET topoFile`，失败再回退 WS `GET_VERTICES` / `GET_*`
-
-### 2026-09-07
-
-- 新增独立地形 TIN：`tools/terrain-from-dwg` 把 DWG 等高线（去掉文字/符号块）转成 `.damt`；VIEWER 字段 `terrain` 加载 `{server}terrain/{id}` → **TerrainActor**（高程着色，不走有限元）
-
-### 2026-08-21
-
-- 新增 ROOT 字段 `switchFxSpeed`：切换动效播放倍速（`1`=原速，`2`=两倍快）；faceFly / mesh 扫光 / 颜色淡入按时长 `/speed` 缩放
-- 时间轴连续播放共用该倍速：帧间隔 `intervalMs / speed`；`engine.timeline('setPlaySpeed', 2)` 播放中可改；内置面板 / dock 可选 `0.5x / 1x / 2x / 4x`
-
-### 2026-08-20
-
-- 补充 **时间轴播放** API 文档：`engine.timeline(...)` / session 封装；与单点时间序列（`series` 侧文件）无关
-- 补充时间轴 **进度与切换动效**：`onChange` 触发时机、`playhead` 语义、动效 await 后再进下一帧
-
-### 2026-08-17
-
-- 剖切辅助面控件整体加大；鼠标悬停拾取到手柄即放大，点击后不再二次放大（旋转环按轴放大，避免位移跑偏）
-- 双 msh：几何改为加载 `{server}damb/{meshName}`（不再走 WS/DB 拓扑）；第二层材料号偏移 **`+10000`**（原 `100000` 废弃）
-
-### 2026-08-10
-
-- 新增应力链：`stressChainMode` 开启后自动 `rayMode=mesh`，**Ctrl+左键**点选 normal / forecast 顶点生成单链（覆盖）
-- 走 WS `GET_STRESS_CHAIN`；独立 Actor（壳 + 中心线 + 方向箭头 + 端点标记），不入 cache、不参与主网格拾取
-- 需 `targetAttr: "stress"`；`p1/p2/p3`（轴 6/7/8）可单独切；种子策略 `nearHit` / `maxAbs`
-
-### 2026-08-04
-
-- 新增 ACTOR 位移矢量箭头：`arrow` / `arrowMode` / `arrowScale` / `arrowAspect` / `arrowMinMag` / `arrowStride`
-- GPU 实例化（杆 + 固定锥角圆锥头）；默认合力向量，可选 XYZ 三轴分显
-- 支持 **normal / eph（切片）/ forecast（damf）**；`actor:global:state` 未指定 `type` 时三层一起写
-- 需先加载 `targetAttr: "displacements"`；最长箭头 ≈ 模型对角线 × 3% × `arrowScale`
-
-### 2026-07-26
-
-- 新增 ROOT 字段 `switchFx`：统一开关三种切换动效（`meshName` 平面扫光 / `drawRange` faceFly / `attr` 颜色交叉淡入）
-- `false` 全关；`true` 或缺省全开；对象 `{ meshName, drawRange, attr }` 可分别控制
-
-### 2026-07-23
-
-- 补充 State / Event 监听与取消监听 API（`watch` / `unwatch`、`on` / `off` / `once`）
-
-### 2026-07-21
-
-- 新增 VIEWER 字段 `colorLegendVisible`（默认 `false`）：每 viewer 右下角色标图例，仅 `true` 时显示
-
-### 2026-07-29
-
-- `viewer:camera:view:done`：等全部 topo 落定 + actor/扫光完成后再最终 fit；done 后关闭自动 fit，外部可安全改相机
-
-### 2026-07-20
-
-- 新增 VIEWER 字段 `dams` / `slopeLineWidth`：加载 `.dams` → **SlopeActor**（粗线 LineSegments2 + JC 白/BD·GD 黑/其它深灰点球；线色走 Actor LUT 深蓝→深红）
-- 内部自动相机 fit 与外部 `viewer:camera:view` 分离；内部完成后 emit `viewer:camera:view:done`（payload: `{ id, source }`）
-- `viewer:camera:view:done` 表示**内部视角处理已结束**（全部 topo 落定 + actor 构建/扫光完成 + 最终 fit 动画结束），外部此时可安全改相机；之后不会再因增量 topo 自动重置视角
-
-### 2026-07-16
-
-- 新增引擎根 **网络忙状态**：`root.networkBusy` / `networkActive` / `networkByKind`，事件 `net:busy`（兼 `net:start` / `net:end`）
-- 覆盖 WS（`sendQuery`）、damf 加载挂载、damb、meshVersions；cache 命中不计 busy
-- 新增 VIEWER 字段 `envelopeMode`（见 `字段定义.js` `ENVELOPE_MODE`）：`null`/`""` 关闭；`"max"` / `"min"` 显示最大/最小包络云图
-- 开启后旁路 **WS `GET_ENVELOPE`**（二进制格式与 `GET_ATTR` 相同；缺缓存时服务端先 Build），忽略 `targetAttrVersion` / `targetStep`；仅改 `envelopeMode` 也会自动刷云图
-- HTTP `POST/GET /damviewer/envelope` 仍可用于调试/强制刷新；前端显示链路不走 HTTP
-- `displacements` 包络仍走 `updateDisp`，变形系数 `dispCoef` 照常生效
-- 仅一个 attrVersion（甚至单 step）也可算包络；单 step 时 min/max 相同
-
-### 2026-07-14
-
-- 新增 VIEWER 字段 `dualMeshName`：启用/关闭双 msh 加载（非空进入 dual 并同步 `meshName`；`null`/`""` 关闭后按 normal 重载）
-- `getAllActorState(viewerId, 'dualMesh')` / `actor:state` 的 `type:'dualMesh'` 已接入
-- 补充双 msh 开关与 Actor 读写示例
-
----
-
-## 目录
-
-- [DamViewer Stream — State \& Event API](#damviewer-stream--state--event-api)
-  - [ChangeLog](#changelog)
-    - [2026-09-14](#2026-09-14)
-    - [2026-09-07](#2026-09-07)
-    - [2026-08-21](#2026-08-21)
-    - [2026-08-20](#2026-08-20)
-    - [2026-08-17](#2026-08-17)
-    - [2026-08-10](#2026-08-10)
-    - [2026-08-04](#2026-08-04)
-    - [2026-07-26](#2026-07-26)
-    - [2026-07-23](#2026-07-23)
-    - [2026-07-21](#2026-07-21)
-    - [2026-07-29](#2026-07-29)
-    - [2026-07-20](#2026-07-20)
-    - [2026-07-16](#2026-07-16)
-    - [2026-07-14](#2026-07-14)
-  - [目录](#目录)
-  - [获取 Proxy](#获取-proxy)
-  - [修改 State](#修改-state)
-  - [State 字段](#state-字段)
-    - [ROOT](#root)
-    - [VIEWER](#viewer)
-    - [ACTOR](#actor)
-  - [预演相关说明（forecast / damfScenario）](#预演相关说明forecast--damfscenario)
-  - [包络图（envelopeMode）](#包络图envelopemode)
-  - [位移矢量箭头（arrow）](#位移矢量箭头arrow)
-  - [应力链（stressChainMode）](#应力链stresschainmode)
-  - [边坡监测（dams / SlopeActor）](#边坡监测dams--slopeactor)
-  - [切换动效（switchFx）](#切换动效switchfx)
-  - [网络忙状态（networkBusy）](#网络忙状态networkbusy)
-  - [双 msh（dualMeshName）](#双-mshdualmeshname)
-  - [时间轴播放（timeline）](#时间轴播放timeline)
-  - [Event 事件](#event-事件)
-    - [ROOT](#root-1)
-    - [NET](#net)
-    - [VIEWER](#viewer-1)
-    - [ACTOR](#actor-1)
-    - [ACTOR\_GLOBAL / VIEWER\_GLOBAL](#actor_global--viewer_global)
-    - [WS / DATA](#ws--data)
-  - [监听绑定](#监听绑定)
-    - [监听 State](#监听-state)
-    - [取消 State 监听](#取消-state-监听)
-    - [监听 Event](#监听-event)
-    - [取消 Event 监听](#取消-event-监听)
-  - [常用示例](#常用示例)
-    - [切换浇筑步 / 物理场](#切换浇筑步--物理场)
-    - [边坡监测 dams / SlopeActor](#边坡监测-dams--slopeactor)
-    - [切换动效 switchFx](#切换动效-switchfx)
-    - [网络忙状态](#网络忙状态)
-    - [包络图 envelopeMode](#包络图-envelopemode)
-    - [位移矢量箭头 arrow](#位移矢量箭头-arrow)
-    - [应力链 stressChainMode](#应力链-stresschainmode)
-    - [双 msh dualMeshName](#双-msh-dualmeshname)
-    - [时间轴播放 timeline](#时间轴播放-timeline)
-    - [增量预演 damfScenario](#增量预演-damfscenario)
-    - [Actor 控制](#actor-控制)
-    - [全坝段线框显隐](#全坝段线框显隐)
-  - [默认配置](#默认配置)
-
----
-
-## 获取 Proxy
-
-```js
-engine.getRootState()
-engine.getAllViewerState()                           // [proxy, proxy] Viewer 代理对象数组
-engine.getAllActorState(viewerId)                    // { [matId]: stateProxy }（仅 normal 材料）
-engine.getAllActorState(viewerId, 'measuring')       // { [name]: stateProxy }
-engine.getAllActorState(viewerId, 'eph')             // 切片 Eph 材料
-engine.getAllActorState(viewerId, 'forecast')        // damf 增量 forecast Actor（damfScenario 激活时）
-engine.getAllActorState(viewerId, 'dualMesh')        // 双 msh Actor（dualMeshName 已启用时）
-
-// 示例
-engine.getAllActorState(viewerId)[matId].edge
-engine.getAllActorState(viewerId, 'measuring')['H01XH02'].show
+```bash
+go run . -config config.json
+# 达梦示例：
+go run . -config "config(dm).json"
 ```
 
-> **`actor:global:state`**：未传 `type` 时同步 **normal + eph + forecast**；也可 `type: 'eph' | 'forecast' | 'normal'` 只打一层。
+仓库内两份示例：
 
----
-
-## 修改 State
-
-| 事件 | 用途 | 要点 |
-|------|------|------|
-| `root:state` | 修改根状态 | payload 直接为字段 |
-| `viewer:state` | 修改单个 viewer | 需带 `viewerId` / `id` |
-| `viewer:global:state` | 多窗口同步修改 viewer | `id` 可选；不带则全部 |
-| `actor:state` | 修改单个 actor | 需 `viewerId` + `matId` / `actorid`；`type` 可选 `normal` / `eph` / `forecast` / `measuring` / `dualMesh` |
-| `actor:global:state` | 多窗口/单窗口全部 actor | `viewers`/`viewerId` 可选；未传 `type` 时写 normal+eph+forecast |
-
-```js
-engine.event.emit(EVENTS.ROOT.STATE, { vCount: 1 })
-engine.event.emit("viewer:state", { id: '', state: { grid: false } })
-engine.event.emit("actor:state", { viewer: '', actorid: '', state: { edge: true } })
-engine.event.emit("viewer:global:state", { id: ['', ''], state: {} })
-engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: false } })
-```
-
----
-
-## State 字段
-
-### ROOT
-
-| 常量 | 字段名 | 说明 |
-|------|--------|------|
-| `CONTAINER` | `container` | HTMLElement 容器 |
-| `LEGEND_VISIBLE` | `legendVisible` | 是否显示图例 |
-| `SELECT_VIEWER_STATE` | `selectViewerState` | 当前选中的 viewer state |
-| `VCOUNT` | `vCount` | 渲染器数量 |
-| `LOCK_CAM` | `lockCam` | 是否锁定相机联动 |
-| `SPRITE_IMG` | `spriteImg` | 标签贴图 base64 / url |
-| `LEGEND_IMAGE` | `legendImage` | 图例图片 base64 |
-| `NETWORK_BUSY` | `networkBusy` | 全局是否有在途网络任务（WS / damf / damb 等） |
-| `NETWORK_ACTIVE` | `networkActive` | 在途任务数 |
-| `NETWORK_BY_KIND` | `networkByKind` | 按 kind 计数，如 `{ ws: 2, damf: 1 }` |
-| `SWITCH_FX` | `switchFx` | 三种切换动效总开关（见下方专节） |
-| `SWITCH_FX_SPEED` | `switchFxSpeed` | 切换动效 / 时间轴播放倍速，默认 `1`（见下方专节） |
-
-### VIEWER
-
-| 常量 | 字段名 | 说明 |
-|------|--------|------|
-| `ID` | `id` | Viewer ID |
-| `CAMERA_MODE` | `cameraMode` | `"perspective"` 透视 / `"orthographic"` 正交 |
-| `CAMERA_POS` | `cameraPos` | 相机位置 |
-| `CAMERA_LOOKAT` | `cameraLookat` | 相机注视点 |
-| `CAMERA_LOOK_AT_FIT_RATIO` | `cameraLookAtFitRatio` | 相机视角与模型距离倍率，默认 `0.6` |
-| `AUTO_ROTATE` | `autoRotate` | 自动旋转 |
-| `RAY_MODE` | `rayMode` | `null\|""` 关闭；`"mesh"` 体拾取；`"cut"` 切面拾取；`"measuring"` 测点拾取 |
-| `AXIS_STYLE` | `axisStyle` | 坐标轴样式：`gid` / `blender` |
-| `AXIS_POSITION` | `axisPosition` | `left-top` / `right-top` / `left-bottom`（默认右下角） |
-| `AXIS_SIZE` | `axisSize` | 坐标轴尺寸，默认 `150` |
-| `MESH_NAME` | `meshName` | 网格名 |
-| `DUAL_MESH_NAME` | `dualMeshName` | 双 msh 网格名（单个 string）；非空进入 dual 并同步 `meshName`；`null`/`""` 关闭后按 normal 重载 |
-| `TARGET_ATTR` | `targetAttr` | 物理量名 |
-| `TARGET_ATTR_VERSION` | `targetAttrVersion` | 物理量版本（`damfScenario` / `envelopeMode` 开启时不参与云图旁路） |
-| `TARGET_MESH_VERSION` | `targetMeshVersion` | 浇筑版本（damf 打开时自动对齐 `base_mesh_version`） |
-| `TARGET_STEP` | `targetStep` | 物理量小步 |
-| `TARGET_AXIS` | `targetAxis` | 选中轴下标 `0/1/2`（x/y/z）；位移常用 `3` 合位移 |
-| `UPDATE_ATTR` | `updateAttr` | 更新 `target*` 后触发云图刷新（**必填触发项**） |
-| `ALL_MESH` | `allMesh` | 全坝段线框文件名或空 |
-| `ALL_MESH_SHOW` | `allMeshShow` | 全坝段线框显隐（默认 `true`）；各窗口可分别控制 |
-| `FORECAST` | `forecast` | 全量 `.damb` 低透明叠层（overlayMesh），非 damf 增量预演 |
-| `DAMF_SCENARIO` | `damfScenario` | 增量预演 damf 场景 id；空字符串 = 关闭 |
-| `ENVELOPE_MODE` | `envelopeMode` | 包络图：`null`/`""` 关；`"max"` 最大包络；`"min"` 最小包络（见下方专节） |
-| `COLOR_PALETTE` | `colorPalette` | 色板图 base64 |
-| `NUM_ARR` | `numArr` | 最大最小值显式数组（字符串数组） |
-| `COLOR_LEGEND_VISIBLE` | `colorLegendVisible` | 右下角色标图例显隐，默认 `false` |
-| `MESH_VERSIONS` | `meshVersions` | 浇筑版本列表 |
-| `MIN` | `min` | 当前显式内容最小值 |
-| `MAX` | `max` | 当前显式内容最大值 |
-| `LOCK_RANGE` | `lockRange` | 锁定最大最小值 |
-| `PRELOAD` | `preload` | 预加载列表 `[]` |
-| `HIGHLIGHT` | `highLight` | 高亮范围 |
-| `ENABLEHIGHLIGHT` | `enableHighLight` | 是否启用高亮 |
-| `CELL_HIGHLIGHT` | `cellHighlight` | 单元高亮：`{ cellIds: number[] }` |
-| `CUT` | `cut` | 切片触发（常用 `Math.random()` 或回车） |
-| `SHOWCLIPPLANE` | `showClipPlane` | 材质裁剪开关 `bool` |
-| `SHOW_CLIP_PLANE_HELPER` | `showClipPlaneHelper` | 裁剪辅助面 + 平移/旋转控件；悬停拾取到手柄即放大 |
-| `CLIP_PLANE_NORMAL` | `clipPlaneNormal` | 切片方向 |
-| `CLIP_PLANE_CONSTANT` | `clipPlaneConstant` | 切片位置 `(-1000, 1000)` |
-| `GRID` | `grid` | 全局网格线开关（默认 `false`） |
-| `OPACITY` | `opacity` | viewer 级透明度 `0–1`，统一下发到各 actor |
-| `USE_DEFAULT_COLOR` | `useDefaultColor` | viewer 级默认色，统一下发到各 actor |
-| `MEASURING` | `measuring` | 测点数据 `Point[]` 或 `{ config?, measuring:[] }`；显隐/透明度走 `actorManager(type=measuring)` |
-| `DAMS` | `dams` | 边坡监测 dams id；空=关闭；加载 `{server}dams/{id}` → SlopeActor，并自动写入默认地形 |
-| `TERRAIN` | `terrain` | 地形 TIN / GLB id；空=关闭；加载 `{server}terrain/{id}` → TerrainActor。加载 `dams` 时自动写成默认值 `xld`（`dvServer/terrain/xld.glb`） |
-| `SLOPE_LINE_WIDTH` | `slopeLineWidth` | SlopeActor 线宽（像素），默认 `3.5` |
-| `SLOPE_POINT_RADIUS` | `slopePointRadius` | SlopeActor 点球世界半径，默认 `0.8` |
-| `SLOPE_POINT_COLOR_JC` | `slopePointColorJc` | JC 点球颜色，默认 `#ffffff` |
-| `SLOPE_POINT_COLOR_BD` | `slopePointColorBd` | BD / GD 点球颜色，默认 `#111111` |
-| `SLOPE_POINT_COLOR_OTHER` | `slopePointColorOther` | 其它点球颜色，默认 `#555555` |
-| `SLOPE_ATTRS` | `slopeAttrs` | 只读：挂载后由引擎写入的 `.dams` 物理量名列表，供 UI 下拉 |
-| `SLOPE_STEPS` | `slopeSteps` | 只读：挂载后由引擎写入的 `.dams` 时间步列表，供 UI 下拉 |
-| `SLOPE_FOCUS` | `slopeFocus` | 地形 / 监测互斥：`false`=地形+菱形标点；`true`=监测模型（隐藏地形） |
-| `SLOPE_LOAD_PHASE` | `slopeLoadPhase` | 只读：`idle` / `loading` — dams / 地形文件请求中 |
-| `STRESS_CHAIN_MODE` | `stressChainMode` | 应力链模式；`true` 时自动 `rayMode=mesh`，Ctrl+左键点选生成单链（见下方专节） |
-| `STRESS_CHAIN_SEED` | `stressChainSeed` | 当前链种子 `{ vertexIndex?, vertexId?, axis?, hitPoint? }`；`null` = 无链 |
-| `STRESS_CHAIN_AXIS` | `stressChainAxis` | 主应力分量：`6`/`"p1"`、`7`/`"p2"`、`8`/`"p3"`（默认 `6`） |
-| `STRESS_CHAIN_SEED_POLICY` | `stressChainSeedPolicy` | 共用顶点时选种子单元：`nearHit`（默认）/ `maxAbs` |
-| `STRESS_CHAIN_SHOW_SHELL` | `stressChainShowShell` | 链壳显隐，默认 `true` |
-| `STRESS_CHAIN_SHOW_LINE` | `stressChainShowLine` | 中心线显隐，默认 `true` |
-| `STRESS_CHAIN_SHOW_ARROWS` | `stressChainShowArrows` | 方向箭头显隐，默认 `true` |
-| `STRESS_CHAIN_SHELL_OPACITY` | `stressChainShellOpacity` | 链壳透明度，默认 `0.85` |
-| `STRESS_CHAIN_LINE_WIDTH` | `stressChainLineWidth` | 中心线宽，默认 `2.5` |
-| `STRESS_CHAIN_ARROW_SCALE` | `stressChainArrowScale` | 箭头长度倍率，默认 `0.6` |
-| `STRESS_CHAIN_ARROW_OPACITY` | `stressChainArrowOpacity` | 箭头透明度，默认 `0.92` |
-| `STRESS_CHAIN_ARROW_COLOR` | `stressChainArrowColor` | 箭头颜色，默认 `"#000000"` |
-| `STRESS_CHAIN_MAX_CELLS` | `stressChainMaxCells` | 链最长单元数，默认 `200` |
-| `STRESS_CHAIN_ALIGN_COS` | `stressChainAlignCos` | 相邻单元主方向对齐阈值（余弦），默认 `0.5` |
-| `TIMELINE_MODE` | `timelineMode` | 时间轴：`"off"` / `"on"`（由 `engine.timeline` 写入，见下方专节） |
-| `TIMELINE_PLAYHEAD` | `timelinePlayhead` | 当前帧下标 |
-| `TIMELINE_BUFFER_RATIO` | `timelineBufferRatio` | 已缓冲帧比例 `0–1` |
-| `TIMELINE_PLAYING` | `timelinePlaying` | 是否正在播放 |
-| `TIMELINE_REBUFFERING` | `timelineRebuffering` | 是否因缺缓存而等待补缓冲 |
-| `TIMELINE_PLAY_SPEED` | `timelinePlaySpeed` | 播放倍速，与 `root.switchFxSpeed` 同步 |
-
-### ACTOR
-
-| 常量 | 字段名 | 说明 |
-|------|--------|------|
-| `EDGE` | `edge` | 边框线 `bool` |
-| `GRID` | `grid` | 网格线 `bool` |
-| `LIGHT` | `light` | 发光 `bool` |
-| `OPACITY` | `opacity` | 透明度 `0.0 – 1.0` |
-| `NAME` | `name` | 名称 |
-| `DISPLAY_MODE` | `displayMode` | 显示模式：`point` / `line` / `surface` |
-| `SHOW` | `show` | 显示总开关 `bool` |
-| `DROP` | `drop` | 删除 actor |
-| `SCENARIO_ID` | `scenarioId` | forecast 增量 Actor 专有：所属 damf scenario id（只读，由挂载写入） |
-| `USE_DEFAULT_COLOR` | `useDefaultColor` | 是否使用默认色 `bool` |
-| `DISP_COEF` | `dispCoef` | 变形系数 |
-| `ARROW` | `arrow` | 位移矢量箭头开关 `bool`（默认 `false`） |
-| `ARROW_MODE` | `arrowMode` | `resultant` 合力（默认）/ `xyz` 三轴 RGB 分显 |
-| `ARROW_SCALE` | `arrowScale` | 长度倍率（相对自适应参考长度，默认 `1`） |
-| `ARROW_ASPECT` | `arrowAspect` | 锥头底半径/头高（固定锥角，宜 `0.35~0.55`，默认 `0.45`） |
-| `ARROW_MIN_MAG` | `arrowMinMag` | 模长阈值，低于不画 |
-| `ARROW_STRIDE` | `arrowStride` | 顶点抽样步长 `>=1`，越大越稀 |
-| `MAT_STYLE` | `matStyle` | 显示材料：`normal` / `shader` |
-| `ISO_LINE_NUM` | `isoLineNum` | 等值线分段数，`0` 为关闭 |
-| `ISO_LINE_WIDTH` | `isoLineWidth` | 等值线线宽，默认 `1.5` |
-| `COLOR_STEP_NUM` | `colorStepNum` | 色阶显式数，默认 `5` |
-| `USE_COLOR_STEP` | `usecolorStep` | 是否启用色阶 `bool` |
-| `REMAINING` | `remaining` | 是否显示全坝未浇筑部分 |
-
----
-
-## 预演相关说明（forecast / damfScenario）
-
-| 字段 | 含义 |
+| 文件 | 用途 |
 |------|------|
-| `forecast` | 全量 `.damb` 低透明叠层（overlayMesh），与主模型物理量版本无关，仅参考几何 |
-| `damfScenario` | 增量预演 id；加载 `{id}.damf` + 挂 forecast Actor。`normal` = DB 几何 + damf res 前段；`forecast` = damf 增量 mesh + damf res 后段。云图不看 `targetAttrVersion`；测点仍走 WS |
+| [`config.json`](./config.json) | MySQL |
+| [`config(dm).json`](./config(dm).json) | 达梦（DM） |
 
-**前置条件**：`meshName` 已加载且与 damf 内 `mesh_name` 一致；通常只需设置 `damfScenario`。
+数据目录（与 JSON 配置无关）。默认都在 **dvServer 可执行文件所在目录** 下创建 / 读取；`go run` 时回退到当前工作目录。可用环境变量覆盖某一项。
 
----
+[`start.sh`](./start.sh) 与二进制放在同一目录：脚本以自身所在目录为工作目录启动，不依赖 `/data`。
 
-## 包络图（envelopeMode）
+| 用途 | 默认路径 | 环境变量覆盖 |
+|------|----------|--------------|
+| 临时文件 | `{程序目录}/tmp` | `TEMP_DIR` |
+| damb | `{程序目录}/damb` | `DAMB_DIR` |
+| 物理量 / 网格 delta / catalog | `{程序目录}/attrstore` | `ATTR_DIR` |
+| forecast（damf） | `{程序目录}/forecast` | `FORECAST_DIR` |
+| 测点（dams） | `{程序目录}/dams` | `DAMS_DIR` |
+| 地形 | `{程序目录}/terrain` | `TERRAIN_DIR` |
+| 前端页面 | `{程序目录}/panel`，或与程序目录并列的 `panel` | `UI_DIR` |
 
-对应 `字段定义.js` 的 `VIEWER.ENVELOPE_MODE` / `envelopeMode`。
+前端：把含 `index.html` 的 `panel` 目录放在程序目录下，或与 `dvServer` 目录并列。启动后浏览器打开 `http://<host>:<httpPort>/`。没有 `index.html` 时只提供 `/damviewer` API，不报错退出。
 
-| 值 | 行为 |
+读写代码在包 [`attrfile/`](./attrfile/)、[`meshfile/`](./meshfile/)。
+
+旧月表一次性迁到文件：`go run . -config config.json -migrate-attrs 工程名`（`*` 表示全部 mesh），完成后退出。
+
+### 字段说明
+
+#### 通用
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `httpPort` | int | 否 | HTTP 监听端口，默认 `3000`，实际监听 `:{httpPort}` |
+| `host` | string | 否 | 本机连库主机；拼进 `sqlLinks` 里的 `%s` |
+| `dockerHost` | string | 否 | Docker 内连库主机；`InitEngine(..., inDocker=true)` 时用它替换 `%s` |
+| `dbType` | string | 建议填 | `mysql` 或 `dm`；不填则根据 `sqlLinks` 内容推断 |
+| `sqlLinks` | object | **是** | 四条连接串，见下表 |
+| `envelope` | string[] | 否 | 启动后（及 upload 刷新后）自动算包络的 mesh 名；`[]` / 默认 = 不自动算；含 `"*"` = 全部 |
+| `fullCacheMeshes` | string[] | 否 | 启动时全量常驻缓存的 mesh；`[]` / 默认 = 全部走按需零散缓存；含 `"*"` = registry 内全部全量预载 |
+| `maxScatteredMemoryMB` | int | 否 | 非全量 mesh 的零散缓存内存上限（MB）；`<=0` = 不限制 |
+
+`POST /damviewer/envelope` 始终可手动刷新包络，不依赖 `envelope` 配置。
+
+#### `sqlLinks`（必填四键）
+
+| 键 | 用途 |
 |----|------|
-| `null` / `""` | 关闭，走普通 `requestAttr` 或 damf 旁路 |
-| `"max"` | 显示最大包络场 |
-| `"min"` | 显示最小包络场 |
+| `Root` | 连实例（建库 / 管理） |
+| `Main` | 主库 `dam_main`（或 DM schema `DAM_MAIN`） |
+| `SubOpen` | 打开已有子库；第二个 `%s` 为库名 / schema |
+| `SubCreate` | 创建子库用的连接 |
 
-要点：
+键名大小写不敏感（会规范成 `Root` / `Main` / `SubOpen` / `SubCreate`）。MySQL 连接串通常带一个 `%s`（host）；`SubOpen` 再带第二个 `%s`（库名）。
 
-- 开启后旁路 **WS `GET_ENVELOPE`**（`mesh` + `name` + `mode:min|max`），二进制流与 `GET_ATTR` 相同（LE float32，按 stride）
-- 缺缓存时服务端在同一次请求内 `BuildEnvelope` 再下发；HTTP `POST /damviewer/envelope` 仍可手动全量刷新
-- **忽略** `targetAttrVersion` / `targetStep`；仍使用 `targetAttr` + `targetAxis`
-- 数据源优先级：`envelopeMode` → `damfScenario` → 普通 attr
-- 仅改 `envelopeMode` 会自动刷新云图；切换物理量时仍建议 bump `updateAttr`
-- `displacements`：写入 `updateDisp`，变形由 actor `dispCoef` 控制
-- 仅一个 attrVersion 也可算；若只有一个 step，则 min/max 相同
+#### 达梦专用（`dbType: "dm"`）
 
----
+| 字段 | 说明 |
+|------|------|
+| `dmUser` | 达梦用户名 |
+| `dmPassword` | 达梦密码（勿做 URL encode，驱动按最后一个 `@` 切分） |
+| `dmPort` | 达梦端口，默认 `5236` |
+| `dmBulkPath` | 批量导入路径；空字符串可用 |
 
-## 位移矢量箭头（arrow）
+### MySQL 示例（`config.json`）
 
-对应 `字段定义.js` 的 `ACTOR.ARROW*`。在已加载 **`displacements`** 后，于顶点绘制杆 + 圆锥头矢量（不写深度，叠在模型上）。
-
-| 字段 | 默认 | 说明 |
-|------|------|------|
-| `arrow` | `false` | 开关 |
-| `arrowMode` | `"resultant"` | 合力一根 / `"xyz"` 三轴分显（X 红 Y 绿 Z 蓝） |
-| `arrowScale` | `1` | 最长箭头 ≈ 模型对角线 × 3% × scale |
-| `arrowAspect` | `0.45` | 锥头底半径 / 头高（头形固定，只拉长圆柱杆） |
-| `arrowMinMag` | `1e-8` | 模长阈值 |
-| `arrowStride` | `1` | 抽样步长，大模型建议 `4` 起 |
-
-适用范围：**normal** 主网格、**eph** 切片、**forecast** damf 增量。合力模式颜色跟顶点 `scalar`/LUT；三轴模式用固定 RGB。
-
----
-
-## 应力链（stressChainMode）
-
-对应 `字段定义.js` / `state_viewer.js` 的 `VIEWER.STRESS_CHAIN_*`。在已加载 **`targetAttr: "stress"`**（9 分量）后，从种子顶点沿主应力方向走链，单独渲染一条链（覆盖，不同时显示多条）。
-
-| 字段 | 默认 | 说明 |
-|------|------|------|
-| `stressChainMode` | `false` | 开：自动切 `rayMode=mesh`；关：恢复之前的 rayMode 并清链 |
-| `stressChainSeed` | `null` | 由 Ctrl+左键写入；也可手动设 `{ vertexIndex }` 或 `{ vertexId }` |
-| `stressChainAxis` | `6` | `p1`/`p2`/`p3`（6/7/8）；改轴会用同一种子重算 |
-| `stressChainSeedPolicy` | `"nearHit"` | 顶点被多单元共用时：距拾取点最近 / `\|σ\|` 最大 |
-| `stressChainMaxCells` | `200` | 链最长单元数 |
-| `stressChainAlignCos` | `0.5` | 相邻单元主方向夹角余弦下限，越小越容易拐弯 |
-
-交互：
-
-- **Ctrl+左键**点选 **normal** 或 **forecast** 表面顶点（切片 / 应力链自身不作为种子）
-- 开启后普通 actor 透明度会压到约 `0.1`，便于看链
-- 箭头不写深度；端点为屏幕固定大小的圆点（白=种子，另一端着色）
-
-数据：旁路 WS **`GET_STRESS_CHAIN`**，二进制不入 cache。改 `targetAttr` / 版本 / step 时若模式仍开，会按当前种子刷新。
-
----
-
-## 边坡监测（dams / SlopeActor）
-
-对应 `字段定义.js` / `state_viewer.js` 的 `VIEWER.DAMS` / `SLOPE_*` / `TERRAIN`。加载 `{server}dams/{id}` → **SlopeActor**（粗线 `LineSegments2` + 分类点球），并自动带入默认地形。
-
-| 字段 | 默认 | 说明 |
-|------|------|------|
-| `dams` | `""` | 监测 id；空=关闭并卸默认地形 |
-| `terrain` | `""` | 地形 id；加载 `dams` 时自动写成 `xld`（`DEFAULT_TERRAIN_ID`），也可单独设 |
-| `slopeLineWidth` | `3.5` | 测线像素宽 |
-| `slopePointRadius` | `0.8` | 点球世界半径 |
-| `slopePointColorJc` | `"#ffffff"` | id 以 `JC` 开头的点球 |
-| `slopePointColorBd` | `"#111111"` | id 以 `BD` / `GD` 开头的点球 |
-| `slopePointColorOther` | `"#555555"` | 其余点球 |
-| `slopeFocus` | `false` | `false`=显示地形（菱形标点）；`true`=显示监测模型并隐藏地形 |
-| `slopeAttrs` | `[]` | 挂载后由引擎写入，勿手改 |
-| `slopeSteps` | `[]` | 挂载后由引擎写入，勿手改 |
-| `slopeLoadPhase` | `"idle"` | `idle` / `loading`，由引擎写入 |
-
-行为：
-
-- 测线颜色走 Actor LUT（深蓝→深红），attr 名取自 `.dams` / `data.yml` 表头；切场仍要 `updateAttr`
-- 加载 `dams` 时强制 `slopeFocus = false`（先看地形）；关闭 `dams` 时把 `terrain` 清成空并卸 SlopeActor
-- 地形与监测同时在场时互斥：点地形上的菱形标点会把 `slopeFocus` 置 `true`；画布右上角按钮可来回切
-- **看地形时**相机相对地面不低于 25°、禁止右键平移；切到监测模型或关闭后还原
-- 测点网中心会贴到地形 GLB 里的 slope/anchor 三角中心（坐标系不同）
-
-门槛：`viewerReady`（有 `viewerId` 即可，不依赖有限元材料）。
-
-```js
-engine.event.emit("viewer:state", {
-  viewerId: "<viewerId>",
-  state: {
-    dams: "xiluodu-meas",
-    slopeLineWidth: 3.5,
-    slopePointRadius: 0.8,
-    slopePointColorJc: "#ffffff",
-    slopePointColorBd: "#111111",
-    slopePointColorOther: "#555555",
-    slopeFocus: false, // true=显示监测模型并隐藏地形
-    targetAttr: "目标位移测值(mm)",
-    targetStep: "2026-07-01 11:00:00",
-    updateAttr: Math.random(),
-  },
-})
-
-// 只读目录（挂载后）
-const viewer = engine.getAllViewerState().find((v) => v.id === "<viewerId>")
-viewer.slopeAttrs  // 物理量名
-viewer.slopeSteps  // 时间步
-
-// 切到监测模型
-engine.event.emit("viewer:state", {
-  viewerId: "<viewerId>",
-  state: { slopeFocus: true },
-})
-
-// 关闭监测并卸默认地形
-engine.event.emit("viewer:state", {
-  viewerId: "<viewerId>",
-  state: { dams: "" },
-})
-```
-
----
-
-## 切换动效（switchFx）
-
-挂在 **引擎根**（`root.state.switchFx`），默认全开：
-
-```js
+```json
 {
-  meshName: true,   // meshName 切换：平面扫光（出/入）
-  drawRange: true,  // meshVersion / drawRange：faceFly 增减面动效
-  attr: true,       // 物理量切换：shader 颜色交叉淡入
+  "httpPort": 3000,
+  "host": "127.0.0.1",
+  "dockerHost": "iwhr.leve.vip",
+  "dbType": "mysql",
+  "envelope": [],
+  "fullCacheMeshes": ["normal", "pre_jingling"],
+  "maxScatteredMemoryMB": 10240,
+  "sqlLinks": {
+    "Root": "root:123456@tcp(%s:3306)/?charset=utf8mb4&parseTime=True&loc=Local",
+    "Main": "root:123456@tcp(%s:3306)/dam_main?charset=utf8mb4&parseTime=True&loc=Local&allowAllFiles=true",
+    "SubOpen": "root:123456@tcp(%s:3306)/%s?charset=utf8mb4&parseTime=True&loc=Local&allowAllFiles=true",
+    "SubCreate": "root:123456@tcp(%s:3306)/?charset=utf8mb4&parseTime=True&loc=Local"
+  }
 }
 ```
 
-| 写法 | 行为 |
-|------|------|
-| 缺省 / `true` | 三种动效全开 |
-| `false` | 三种动效全关（瞬时切换） |
-| `{ meshName, drawRange, attr }` | 按字段分别开关；某键 `!== false` 即开 |
+### 达梦示例（`config(dm).json`）
 
-通过 `root:state` 修改（赋值整对象更稳妥，避免只改嵌套字段时漏触发）：
-
-```js
-// 全关
-engine.event.emit("root:state", { switchFx: false })
-
-// 只保留 mesh 扫光，关掉 drawRange / attr
-engine.event.emit("root:state", {
-  switchFx: { meshName: true, drawRange: false, attr: false },
-})
-
-// 恢复默认全开
-engine.event.emit("root:state", {
-  switchFx: { meshName: true, drawRange: true, attr: true },
-})
-```
-
-也可直接写根 state：
-
-```js
-const root = engine.getRootState()
-root.switchFx = { meshName: true, drawRange: false, attr: false }
-```
-
-### 播放倍速（switchFxSpeed）
-
-挂在 **引擎根**（`root.state.switchFxSpeed`），默认 `1`。合法范围约 `0.25–8`。
-
-会同时缩短：
-
-- actor 切换动效时长（faceFly / mesh 扫光 / 颜色交叉淡入）
-- 时间轴两帧之间的停留（`intervalMs / speed`）
-
-`2` 即整体大约两倍速。当前正在播的那一段动效不会中途加速，从下一帧开始按新倍速走。
-
-```js
-new DamViewer({ switchFxSpeed: 2 })
-
-engine.event.emit("root:state", { switchFxSpeed: 2 })
-
-const root = engine.getRootState()
-root.switchFxSpeed = 2
-```
-
-时间轴侧也可用 `playSpeed` / `setPlaySpeed`（写入同一字段，见下方「时间轴播放」）。
-
----
-
-## 网络忙状态（networkBusy）
-
-挂在 **引擎根**（`DVEngineContext` / `NetStatusManager`），不放在 finite 业务层。WS 池与 forecast HTTP 统一引用计数。
-
-| kind | 来源 |
-|------|------|
-| `ws` | `Net.sendQuery`（attr / envelope / topo / cut…） |
-| `damf` | damf 加载 + 挂载整段 |
-| `http.damb` | `allMesh` / `forecast` / 双 msh 的 damb |
-| `http.mesh` | 普通网格 `verticesFile` / `topoFile` |
-| `http.attr` | 物理量 `attrFile` |
-| `http.meshVersions` | mesh 切换拉版本列表 |
-| `http.forecast` / `http.forecast.warm` | 单独拉 damf / 预热（未被外层 `damf` 包住时） |
-
-cache 命中不计 busy。
-
-```js
-// 绑 UI（State）
-const netUi = {
-  stateHandlers: {
-    networkBusy: (busy) => { /* loading overlay */ },
-  },
+```json
+{
+  "httpPort": 3000,
+  "host": "iwhr.leve.vip",
+  "dockerHost": "iwhr.leve.vip",
+  "dbType": "dm",
+  "dmUser": "SYSDBA",
+  "dmPassword": "Dam123456897",
+  "dmPort": 5237,
+  "dmBulkPath": "",
+  "envelope": [],
+  "fullCacheMeshes": [],
+  "maxScatteredMemoryMB": 10240,
+  "sqlLinks": {
+    "Root": "dm://%s:5237",
+    "Main": "dm://%s:5237?schema=DAM_MAIN",
+    "SubOpen": "dm://%s:5237?schema=%s",
+    "SubCreate": "dm://%s:5237"
+  }
 }
-engine.getRootState().watch(netUi)
-
-// 或事件（busy 仅在 true↔false 翻转时发出）
-const onBusy = ({ busy, active, byKind }) => { /* ... */ }
-engine.event.on('net:busy', onBusy)
-
-// 快照
-engine.getNetStatus?.() // { busy, active, byKind }
-
-// 取消
-engine.getRootState().unwatchAll(netUi)
-engine.event.off('net:busy', onBusy)
 ```
 
-相关事件：`net:start` / `net:end` / `net:busy`（常量 `EVENTS.NET.*`）。
+预加载相关字段（`envelope` / `fullCacheMeshes` / `maxScatteredMemoryMB`）与 MySQL 语义相同；达梦示例里默认不自动包络、不全量预载，按需改成具体 mesh 名即可。
 
----
+### 缓存相关配置怎么选
 
-## 双 msh（dualMeshName）
-
-| 操作 | 行为 |
+| 场景 | 建议 |
 |------|------|
-| `dualMeshName: "<mesh>"` | 进入双 msh；若与当前 `meshName` 不同会同步写入 `meshName` 并按 dual 加载 |
-| `dualMeshName: null` / `""` | 关闭 dual；**保持**当前 `meshName`，按 normal 重载 |
-| Actor 读写 | `getAllActorState(viewerId, 'dualMesh')`；`actor:state` 可带 `type:'dualMesh'` |
-
-第二层材质号相对原始材料号有偏移（`DUAL_MESH_MAT_OFFSET = 10000`），与后端 `DualMeshMaterialOffset` 一致。几何来自 **`GET {server}damb/{meshName}`**（单 dim，`matId >= 10000` 为第二层），不再走 WS 拉双 msh 拓扑。
+| 常用 mesh、内存够 | `fullCacheMeshes` 写上 mesh 名，启动全量常驻 |
+| 全部 mesh 都常驻 | `fullCacheMeshes: ["*"]` |
+| 省内存、按需加载 | `fullCacheMeshes: []`，用 `maxScatteredMemoryMB` 卡住零散缓存 |
+| 上传后自动刷包络 | 把 mesh 写入 `envelope`（或 `"*"`） |
 
 ---
 
-## 时间轴播放（timeline）
+## HTTP 接口一览
 
-按结果版本 / 时间步序列静默预取场数据，再按帧切换云图。**与单点历史曲线无关**（单点走后端 `series` 侧文件 / `GetAttrMultyOnePoint`）。
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/` 或 `/damviewer/` | 前端页面（`panel/index.html`；后者兼容 Nginx 把 `/tDamviewer/` 反代到 `/damviewer/`） |
+| `GET` | `/damviewer/ws` | WebSocket（网格拓扑 / 属性 / 切片 / 应力链等） |
+| `POST` | `/damviewer/upload` | 上传网格 / 测点（异步处理） |
+| `POST` | `/damviewer/remove` | 删除指定 version 及之后的入库数据 |
+| `GET` | `/damviewer/meshes` | 工程列表（主库 `mesh_registry`） |
+| `GET` | `/damviewer/meshVersions?mesh=` | 查询某 mesh 的全部 version 记录 |
+| `GET` | `/damviewer/attrVersions?mesh=` | 物理量导入目录（`attr_import_log`） |
+| `GET` | `/damviewer/attrOnePoint` | 单点属性时间序列 |
+| `POST` | `/damviewer/envelope?mesh=` | 全量重算包络并覆盖缓存 |
+| `GET` | `/damviewer/envelope?mesh=` | 包络摘要；可带 `attrName` / `refresh` |
+| `POST` | `/damviewer/dxf-overlay` | DXF 剖面叠图，直接返回 SVG |
+| `GET` | `/damviewer/damb` | 列出可用 damb 名（不含 `.damb`，排除 `integral`） |
+| `GET` | `/damviewer/damb/:name` | 下载 `./damb/{name}.damb` |
+| `GET` | `/damviewer/attrFile` | 下载一场物理量 `.f32`（`mesh` / `meshVersion` / `version` / `name` / `step`） |
+| `GET` | `/damviewer/verticesFile?mesh=` | 普通网格顶点 float32 LE（与 WS `GET_VERTICES` 同内容；无则 404，前端回退 WS） |
+| `GET` | `/damviewer/topoFile?mesh=&tag=` | 普通网格拓扑：JSON layout + `0x1F0x1E` + uint32 LE（`tag` = surfaces/faces/grids/edges/lines/points） |
+| `GET` | `/damviewer/forecast/:name` | 下载 `{name}.damf`（gzip） |
+| `GET` | `/damviewer/forecast/:name/attr/:attr` | 下载属性文件 `.damfa` |
+| `GET` | `/damviewer/dams/:name` | 下载 `{name}.dams`（gzip） |
+| `GET` | `/damviewer/terrain/:name` | 下载 `{name}.damt`（gzip，地形 TIN） |
 
-数据路径：前端 `requestAttr` 拉整场 `fields` + WS **`START_ATTR_WARM` / `CANCEL_ATTR_WARM`** 后端预热（与普通 PrefetchNext 分离）。
+地形默认目录见上文 `{程序目录}/terrain`（`TERRAIN_DIR` 可覆盖）。
 
-### 入口
+从 DWG 生成：`node tools/terrain-from-dwg/index.mjs <file.dwg> dvServer/terrain/<id>.damt`
 
-```js
-// 默认第一个 viewer；也可 engine.timeline(viewerId, 'configure', opts)
-engine.timeline('configure', opts)
-engine.timeline('start')
-engine.timeline('play')
-engine.timeline('pause')
-engine.timeline('seek', index)
-engine.timeline('stop')
-engine.timeline('status')
-engine.timeline('setPlaySpeed', 2)
-engine.timeline('reconfigure', partial)
-engine.timeline('switchAttr', partial)
-engine.timeline('switchFrames', frames, extra?)
+已开启 CORS（开发期允许任意 Origin）。
+
+### 常用查询参数
+
+**meshes**
+
+- 无查询参数；返回 `{ "data": [ MeshRegistry, … ] }`
+
+**remove**
+
+- `mesh`（必填；JSON 也可用 `meshName`）
+- `version`（必填，`> 0`；JSON / 查询也可用 `ts`）
+
+**meshVersions**
+
+- `mesh`（必填）
+
+**verticesFile**
+
+- `mesh`（必填）；body 为 float32 LE xyz，与 WS `GET_VERTICES` 相同。`Cache-Control: no-store`（浇筑增量会改同一 URL）
+
+**topoFile**
+
+- `mesh`、`tag`（必填；`surfaces` / `faces` / `grids` / `edges` / `lines` / `points`）
+- body：`{ mesh, tag, layout }` JSON + `0x1F 0x1E` + 按 layout 顺序的 uint32 LE 索引（与对应 `GET_*` 相同）
+
+**attrVersions**
+
+- `mesh`（必填）；返回 `{ mesh, data }`（`version_ts` / `mesh_version` / `attr_detail` / `step`）
+
+**attrOnePoint**
+
+- `mesh`、`attrName`、`vertexIndex`（必填）
+- `axis`（可选；标量可空，矢量指定分量）
+
+**envelope**
+
+- `mesh`（必填）
+- `attrName`（可选；有则返回该属性 min/max 数据，无则返回摘要）
+- `refresh=1|true`（可选；GET 时先重算再返回）
+
+---
+
+## 删除版本 `POST /damviewer/remove`
+
+删除指定 `version` **及之后**的入库数据（拓扑 / 半动态 / 属性 / `mesh_version` / `attr_import_log`），清理逻辑与原上传重算前相同，但不重新写入。完成后刷新该 mesh 缓存。
+
+单向约束（业务：先删再传）：正在写入 attrstore 时删除返回 `409`；删除进行中**允许**上传。
+
+查询参数：
+
+```bash
+curl -X POST "http://localhost:3000/damviewer/remove?mesh=normal&version=1710000000000"
 ```
 
-内置壳 / session 封装同名：`session.timelineConfigure` / `timelinePlay` / `timelineStatus` 等（`logs` 默认用 `session.attrCatalog.logs`）。
+或 POST JSON（`mesh` / `meshName`，`version` / `ts` 均可）：
 
-### 帧契约
+```bash
+curl -X POST http://localhost:3000/damviewer/remove \
+  -H "Content-Type: application/json" \
+  -d '{"mesh":"normal","version":1710000000000}'
+```
 
-播放顺序以显式 `frames[]` 为准。每帧：
+成功：`{ "mesh": "normal", "version": 1710000000000, "ok": true }`
+
+---
+
+## DXF 剖面叠图 `POST /damviewer/dxf-overlay`
+
+独立模块，与网格 / WS 无关。把结果 DXF 叠到底图 DXF 上，成功直接返回 **`image/svg+xml`**（不是 JSON）。
+
+`multipart/form-data`：
+
+| 字段 | 是否必填 | 说明 |
+|------|----------|------|
+| `result` | **是** | 结果 DXF（每次都传） |
+| `base` | 否 | 底图 DXF。首次或换底图时带上，进程内缓存；之后只传 `result` |
+
+- 底图画 `HATCH` / `LWPOLYLINE` / `LINE`
+- 叠加层目前只画 `result` 里的 **`ARC`**，并用底图 `HATCH` 做遮罩：只显示落在底图填充区内的曲线
+- 缓存随进程，重启后需再传 `base`
+- 失败返回 JSON：`{ "error": "…" }`
+
+```bash
+# 首次（带底图）
+curl -X POST http://localhost:3000/damviewer/dxf-overlay \
+  -F "base=@base.dxf" \
+  -F "result=@RESULT_Outline.dxf" \
+  -o overlay.svg
+
+# 之后只更新结果
+curl -X POST http://localhost:3000/damviewer/dxf-overlay \
+  -F "result=@RESULT_Outline.dxf" \
+  -o overlay.svg
+```
+
+---
+
+## 上传接口 `POST /damviewer/upload`
+
+`multipart/form-data`。超过约 100MB 的部分会落到临时文件（非体积上限），实测 GB 级也可传。
+
+上传成功后**立即返回**，实际导入 / 转换在后台执行；完成后会向 `config.url` 发 POST 回调。
+
+### 全局约束
+
+1. **同一时间只允许一个导入任务**。忙时返回 `409`：
+   ```json
+   { "status": "busy", "message": "已有导入任务正在进行，请稍后再试" }
+   ```
+   删除进行中**不**拦上传；上传写入 attrstore 时不允许删除。
+2. **必须**带表单字段 `config`（JSON 字符串），且至少包含 `meshName`。
+3. `dams` 与 `forecast` **不能同时开启**。
+4. 文件字段名可用专用字段（`msh` / `res` / `zip` 等），也可用 `files`，服务端会按扩展名 / 文件名兜底识别。
+5. **同一 ts 重传不再自动删除该版本及之后数据**。需要删除时先调用 `POST /damviewer/remove`。
+
+### 上传 config 字段
+
+```json
+{
+  "meshName": "normal",
+  "ts": 1710000000000,
+  "id": "task-uuid",
+  "url": "https://your-callback/hook",
+  "forecast": false,
+  "dams": false,
+  "meshVersion": 0,
+  "requiredResult": "",
+  "unitCoefficient": {},
+  "zip": null
+}
+```
 
 | 字段 | 说明 |
 |------|------|
-| `attrVersion` | 结果版本（亦可用 `version` / `versionTs`） |
-| `meshVersion` | 浇筑版本；缺省时回退为 `attrVersion` |
-| `attrName` | 物理量名 |
-| `step` | 时间步字符串，默认 `"1"` |
-| `axis` | 分量轴，默认 `0` |
-
-### configure
-
-两种装载方式（二选一优先）：
-
-1. **显式 `frames[]`**（推荐业务自建序列时用）
-2. **`logs` + 起止版本** → 按 catalog 展开（版本升序 → attr → step）
-
-| 参数 | 说明 |
-|------|------|
-| `frames` | 显式帧数组；有则忽略区间展开 |
-| `logs` | `attr_import_log` 列表（含 `versionTs` / `meshVersion` / `attrs` / `steps`） |
-| `startAttrVersion` / `endAttrVersion` | 结果版本闭区间 |
-| `startMeshVersion` / `endMeshVersion` | 可选浇筑区间约束 |
-| `attrName` / `attrNames` | 物理量；不传则用当前 `targetAttr`；catalog 展开时 `attrNames` 空 = 该版本全部 attr |
-| `step` / `steps` | 限制时间步；**都不传** = 各版本 `log.steps` 全部（无则 `['1']`） |
-| `axis` / `axisByAttr` | 默认轴；可按物理量覆盖 |
-| `intervalMs` | 帧间隔，默认 `400`（**切换动效结束之后**再等这么久才进下一帧；实际等待为 `intervalMs / switchFxSpeed`） |
-| `playSpeed` / `switchFxSpeed` | 播放倍速，默认跟 `root.switchFxSpeed`（`1`）；写入根状态，动效时长与帧间隔一起缩放 |
-| `onChange` | `(status) => void`；**不是**整段播完才调，见下方「进度与切换动效」 |
-
-典型流程：`configure` → `start`（开预取 + warm）→ `play`。
-
-### 其它方法
-
-| 方法 | 行为 |
-|------|------|
-| `start` | `mode=on`，从当前 playhead 开 warm + 前端预取；不自动播 |
-| `play` / `pause` | 播放 / 暂停；未 `start` 时 `play` 会先 `start` |
-| `seek(i)` | 跳到下标 `i`；停旧 warm，从该帧重开预热 |
-| `stop` | 退出时间轴，`CANCEL_ATTR_WARM`；普通 PrefetchNext 不动 |
-| `switchAttr` | 保留上次区间/logs，换物理量或 step，从 0 重开 |
-| `switchFrames` | 整表替换 `frames[]` |
-| `reconfigure` | 合并上次 `configure` 参数再重建（改间隔不会把倍速打回装载时的值） |
-| `status` | 见下表 |
-| `setPlaySpeed(n)` | 播放中改倍速；立刻影响下一帧间隔和后续动效时长 |
-
-### status 快照
-
-| 字段 | 说明 |
-|------|------|
-| `mode` | `"off"` / `"on"` |
-| `playing` / `rebuffering` | 播放中 / 补缓冲中 |
-| `playhead` / `frameCount` | 当前帧下标 / 总帧数（语义见下） |
-| `bufferRatio` / `bufferEnd` | 已缓冲比例 / 从 playhead 起连续已缓存到哪 |
-| `intervalMs` / `playSpeed` / `activeAttr` / `ticks` | 间隔、倍速、当前物理量、每帧相对上一帧的刻度类型（`mesh`/`attr`/`step`） |
-
-Viewer 上同步写入 `timelineMode` / `timelinePlayhead` / `timelineBufferRatio` / `timelinePlaying` / `timelineRebuffering` / `timelinePlaySpeed`，可 `watch` 刷 UI。
-
-### 进度与切换动效
-
-**`onChange` 触发时机**（每次 `syncViewerState`）：
-
-- `configure` / `start` / `stop` / `play` / `pause` / `seek`
-- 每一帧前进（`playhead` 变化）
-- 进入 / 退出 `rebuffering`
-- 预取推进刷新 `bufferRatio`
-
-不是「整段动画播完才回调」。用来刷进度条看 `st.playhead`、`st.bufferRatio`、`st.playing`、`st.rebuffering` 即可。
-
-**单帧内部顺序**（`play` 时）：
-
-1. 对当前 `playhead` 做 `applyFrame`（拉场 + `await getScalarData`）
-2. `getScalarData` 内会 `await` 切换动效：先等 faceFly / mesh 扫光，再等颜色交叉淡入（`attrSwitchPhase`: `loading` → `fading` → `idle`）
-3. 动效结束后才 `playhead += 1`，再 `onChange`
-4. 再等 `intervalMs / switchFxSpeed` 才播下一帧
-
-因此：
-
-- **不必**自己「等切换动画结束再 seek 下一帧」；`timeline('play')` 已串好
-- `onChange` 里的 `playhead` 多数是「下一帧下标」；刚播完的那一帧是 `playhead - 1`（末帧会 `pause`，停在最后一帧）
-- 整段播完：`!st.playing && st.playhead >= st.frameCount - 1 && st.frameCount > 0`
-
-若只关心切换动效阶段（loading 提示，不是帧进度），可 watch viewer：
-
-```js
-viewer.watch({
-  stateHandlers: {
-    attrSwitchPhase: (phase) => { /* 'idle' | 'loading' | 'fading' */ },
-    meshSwitchPhase: (phase) => { /* 扫光阶段 */ },
-  },
-})
-```
-
-### 内置面板
-
-壳子「时间轴播放」：选物理量与起止结果版本 → **装载缓冲** → **▶**。对应 `bind-ui.js` 的 `armTimelineFromUi`。面板与底部 dock 可选播放倍速 `0.5x / 1x / 2x / 4x`（设置里「切换动效 → 动效倍速」是同一字段）。
-
-### 示例
-
-```js
-// A. catalog 区间（与内置 UI 类似）
-engine.timeline('configure', {
-  logs: attrCatalog.logs,
-  startAttrVersion: 1787103918453,
-  endAttrVersion: 1787109316702,
-  attrName: 'displacements',
-  // steps: ['1'],   // 不传 = 各版本全部 step
-  axis: 0,
-  intervalMs: 400,
-  playSpeed: 2,
-  onChange: (st) => { /* 刷新进度条 */ },
-})
-engine.timeline('start')
-engine.timeline('play')
-
-// B. 显式帧
-engine.timeline('configure', {
-  frames: [
-    { meshVersion: 1787103918453, attrVersion: 1787103918453, attrName: 'temperature', step: '1', axis: 0 },
-    { meshVersion: 1787103918453, attrVersion: 1787103918453, attrName: 'temperature', step: '2', axis: 0 },
-  ],
-  intervalMs: 400,
-})
-engine.timeline('start')
-engine.timeline('play')
-
-engine.timeline('setPlaySpeed', 2)
-engine.timeline('seek', 3)
-engine.timeline('switchAttr', { attrName: 'stress', step: '1' })
-engine.timeline('pause')
-engine.timeline('stop')
-
-const st = engine.timeline('status')
-// st.mode / st.playing / st.playhead / st.frameCount / st.bufferRatio / st.rebuffering / st.playSpeed
-```
-
-注意：
-
-- 需已加载工程且有 attr catalog（或自建 `frames`）
-- 缓存不够会进入 `rebuffering`，缓冲够后再继续播
-- `stop` 只取消播模式 warm，不影响其它预取
-- 切换动效由时间轴内部 await，业务侧用 `play()` 即可；想加快用 `switchFxSpeed` / `setPlaySpeed`，或关 `switchFx` / 减小 `intervalMs`
+| `meshName` | **必填**，目标 mesh 名 |
+| `ts` | 时间戳，会原样回传到回调 |
+| `id` | 任务 id；`dams` 模式必填 |
+| `url` | 后台完成后的回调地址（POST JSON） |
+| `forecast` | `true` → 导出 damf，不写 attrstore |
+| `dams` | `true` → 测点 yml → `.dams` |
+| `meshVersion` | **forecast 必填**：baseline mesh 版本，须在 attrstore catalog 中已存在 |
+| `zip` | zip 模式必填：包内 txt 文件名映射 |
 
 ---
 
-## Event 事件
+### 上传模式
 
-### ROOT
+服务端根据文件自动判定，三种网格模式 + 一种测点模式：
 
-| 常量 | 事件名 | 说明 |
-|------|--------|------|
-| `STATE` | `root:state` | 修改根状态 |
+#### 1. msh + res（attrstore / forecast）
 
-### NET
+| 表单字段 | 说明 |
+|----------|------|
+| `msh` | 网格文件 |
+| `res` | 结果文件 |
+| `config` | JSON |
 
-| 常量 | 事件名 | 说明 |
-|------|--------|------|
-| `START` | `net:start` | 单个网络任务开始 `{ id, kind, meta, busy, active, byKind }` |
-| `END` | `net:end` | 单个网络任务结束 `{ id, kind, ok, error?, … }` |
-| `BUSY` | `net:busy` | 汇总忙状态变化 `{ busy, active, byKind }` |
+也可用 `files` 上传，文件名以 `.msh` / `.res` 结尾即可。
 
-### VIEWER
+- `forecast=false`：解析后写入 `ATTR_DIR`（默认 `./attrstore`）：网格 delta + 场文件
+- `forecast=true`：导出 `.damf`，**不写 attrstore**；必须提供 catalog 中已有的 `meshVersion`
 
-| 常量 | 事件名 | 说明 |
-|------|--------|------|
-| `RESIZE` | `viewer:resize` | 重新计算 canvas 尺寸 |
-| `ID` | `viewer:id` | Viewer ID 相关 |
-| `CAMERAVIEWE` | `viewer:camera:view` | 外部发送：切换 camera 位置（与内部自动 fit 分离） |
-| `CAMERA_VIEW_DONE` | `viewer:camera:view:done` | 内部视角处理结束，外部可改相机；payload: `{ id, source }` |
-| `CAMERASET` | `viewer:camera:set` | 设置相机 |
-| `STATE` | `viewer:state` | 修改单个 viewer state |
-| `RAY_CB` | `viewer:ray:cb` | 订阅：ray 模式返回数据 |
-| `RAY_ProLine` | `viewer:ray:processline` | 射线处理线 |
-| `SHOWMAX` | `viewer:show:max` | 显示 max 标签 |
-| `SHOWMIN` | `viewer:show:min` | 显示 min 标签 |
-| `CLEARMINMAX` | `viewer:clear:minmax` | 清空最值标签 |
-| `GETMAXTAS` | `viewer:max:tas` | 获取温度应力最大值 |
-| `SENDMAXTAS` | `viewer:max:res` | 温度应力最大值回调 |
-| `SHOWINTEGRAL` | `viewer:show:integral` | 显示积分 |
-| `HIDEINTEGRAL` | `viewer:hide:integral` | 隐藏积分 |
-| `INITDONE` | `viewer:init:done` | 初始化完成，可 `setMeshName` |
-| `ALL_MESH_DONE` | `viewer:allmesh:done` | 全坝段线框 `allMesh` 加载完成 |
-| `CLIP_POS_CB` | `viewer:clipPos:cb` | 订阅：剖切平面坐标位置回调 |
+#### 2. 双 msh（双网格合并 → damb）
 
-### ACTOR
+| 表单字段 | 说明 |
+|----------|------|
+| `msh` | 第一个 msh |
+| `msh2` | 第二个 msh |
+| `config` | JSON |
 
-| 常量 | 事件名 | 说明 |
-|------|--------|------|
-| `STATE` | `actor:state` | 修改 actor；`type` 可选 `normal` / `eph` / `measuring` / `dualMesh`（`forecast` 待扩展） |
-| `DONE` | `actor:done` | 可订阅；`payload.kind` 可为 `normal` / `forecast` / …，forecast 时带 `scenarioId` |
+也可两个 `.msh` 都放在 `files` 里。
 
-### ACTOR_GLOBAL / VIEWER_GLOBAL
+**行为：**
 
-| 常量 | 事件名 | 说明 |
-|------|--------|------|
-| `ACTOR_GLOBAL.STATE` | `actor:global:state` | 全局 actor 状态 |
-| `VIEWER_GLOBAL.RESIZE` | `viewer:global:resize` | 全局 resize |
-| `VIEWER_GLOBAL.ACTIVATE` | `viewer:global:activate` | 切换 viewer 时发送，带对象 id |
-| `VIEWER_GLOBAL.INDEX` | `viewer:global:index` | viewer 索引 |
-| `VIEWER_GLOBAL.STATE` | `viewer:global:state` | 全局 viewer 状态 |
+- 不要带 `res`
+- 写出 `{DAMB_DIR}/{meshName}.damb`（不写 attrstore）
+- 第二层材料号 = 原 matId **`+10000`**（前后端统一；原 `100000` 已废弃）
+- 回调带 `"mode": "damb"`，不读 catalog 最新 version
+- **暂不支持** `forecast=true`（forecast 仍走 damf，需要 msh+res）
 
-### WS / DATA
+前端 `dualMeshName` 打开后从 `GET /damviewer/damb/:name` 加载该文件。
 
-| 常量 | 事件名 | 说明 |
-|------|--------|------|
-| `WS.CONNECT` | `finite:ws:connect` | WebSocket 连接成功 |
-| `WS.CLOSE` | `finite:ws:close` | WebSocket 关闭 |
-| `WS.ERROR` | `finite:ws:error` | WebSocket 错误 |
-| `DATA.MESH_READY` | `finite:data:mesh_ready` | 网格就绪 |
-| `DATA.VERTICES_UPDATED` | `finite:data:vertices_updated` | 顶点更新 |
-| `DATA.SURFACE_UPDATED` | `finite:data:surface_updated` | 表面更新 |
-| `DATA.LINE_UPDATED` | `finite:data:line_updated` | 线更新 |
-| `DATA.EDGE_UPDATED` | `finite:data:edge_updated` | 边更新 |
-| `DATA.GRID_UPDATED` | `finite:data:grid_updated` | 网格线更新 |
-| `DATA.POINT_UPDATED` | `finite:data:point_updated` | 点更新 |
-| `DATA.FACE_UPDATED` | `finite:data:face_updated` | 面更新 |
-| `DATA.ATTR_UPDATED` | `finite:data:attr_updated` | 属性更新 |
-| `DATA.CUT_READY` | `finite:data:cut_ready` | 切片 bin 就绪（含 damfScenario 的 `GET_CUT_DAMF` 单包） |
+#### 3. zip（txt 打包）
 
----
+两条路，按 `config.zip` 是否带场数据（`res`）分流。`forecast=true` 时第三条：只出 damf。
 
-## 监听绑定
+| 表单字段 | 说明 |
+|----------|------|
+| `zip` | zip 包 |
+| `config` | JSON，且必须含非空 `zip` 配置 |
 
-State 与 Event 是两套 API：改字段走 state proxy；发/收消息走 `engine.event`。
+`config.zip` 示例（**带场数据**）：
 
-### 监听 State
-
-拿到 proxy（如 `engine.getRootState()`、viewer/actor state）后订阅字段变化。推荐在对象上声明 `stateHandlers`，再 `watch`：
-
-```js
-const ui = {
-  stateHandlers: {
-    // key = 字段名；回调 (newVal, oldVal)
-    [STATES.ROOT.VCOUNT]: (vCount, prev) => {
-      // 渲染窗口数量变化
+```json
+{
+  "meshName": "normal",
+  "ts": 1710000000000,
+  "id": "xxx",
+  "url": "https://callback",
+  "forecast": false,
+  "zip": {
+    "mesh": {
+      "coordinates": "节点.txt",
+      "elements": { "file": "单元.txt", "skipHeaderLines": 1 }
     },
-    networkBusy: (busy) => {
-      // loading overlay
-    },
-  },
+    "res": {
+      "位移": { "file": "位移.txt", "skipHeaderLines": 2, "stripCoordCols": 3 }
+    }
+  }
 }
-
-const root = engine.getRootState()
-root.watch(ui) // 一次性绑上 ui.stateHandlers 里所有 key
 ```
 
-也可按字段订阅（第 2 参为 subscriber 身份，用于之后 unwatch；第 3 参可选自定义回调）：
+`coordinates` / `elements` / 各 res 条目支持两种写法：
 
-```js
-const token = {}
-root.watch('networkBusy', token, (_sub, _key, oldVal, newVal) => {
-  // newVal === busy
-})
+- 字符串：`"节点.txt"`
+- 对象：`{ "file": "...", "skipHeaderLines": 2, "stripCoordCols": 3 }`
 
-// 若省略第 3 参，则调用 token.stateHandlers.networkBusy(newVal, oldVal)
-root.watch('networkBusy', ui)
+`stripCoordCols` 只用于 `id x y z val...`（如 TDISPL）。`RESULT_DISPLACEMENT.OUT` 已是 `id ux uy uz`，不要剥坐标；列数不够时解析器会跳过 strip。
+
+**带场数据**（`config.zip` 有 `mesh` + 非空 `res`）：
+
+- 与 msh+res 同一套写出：`InsertMesh` + `InsertAttr` → `ATTR_DIR`（默认 `./attrstore`）
+- 网格 delta / catalog 在 `meshfile`，场文件与侧文件在 `attrfile`
+- 回调带 `msh` / `res`（来自 catalog）
+
+**仅网格**（有 `mesh.coordinates` + `mesh.elements`，且 **没有** `res`）：
+
+- 走与双 msh 相同的 **damb 写出**（`Convert(true)` → `{meshName}.damb`）
+- **没有** `+10000` 材料偏移（单层，无 Secondary）
+- 回调 `"mode": "damb"`，不写 attrstore
+
+**forecast=true**（须带 `res`，且 `meshVersion` 已在 catalog 中）：
+
+- 走 `HandleUploadToDamfZip`，导出 `.damf` / `.damfa` / `.damfc`，不写 attrstore
+
+#### 4. dams（测点 → `.dams`）
+
+`config.dams = true`，且必须有 `id`。与 forecast 互斥。写出 `{DAMS_DIR}/{id}.dams`（gzip），前端用 `GET /damviewer/dams/:id` 加载。
+
+**必须同时传 3 个文件**（缺一不可）：
+
+| 表单字段 | 说明 |
+|----------|------|
+| `points` | 测点坐标。字段名 `points`，或 `files` 里文件名含 `points` |
+| `lines` | 测线。字段名 `lines`，或文件名含 `lines` |
+| `data` | 监测时序。字段名 `data`，或文件名含 `data` / 为 `data.yml` / `data.yaml` / `data.csv` |
+| `config` | JSON，须含 `meshName`、`id`、`"dams": true` |
+
+扩展名常写成 `.yml`，但内容是**逗号分隔文本**（非严格 YAML）。仓库样例：[`溪洛渡/points.yml`](../溪洛渡/points.yml)、[`lines.yml`](../溪洛渡/lines.yml)、[`data.yml`](../溪洛渡/data.yml)。
+
+三者关系：`points` 定义点 → `lines` 用点 ID 连成测线并给出设备 ID → `data` 按设备 ID 填各时点物理量。
+
+**`points`（无表头）** — 每行 `id,x,y,z`，`id` 不可重复：
+
+```
+GD01,36.504,21.448,799.380
+JC08,36.224,29.122,803.798
 ```
 
-> 注意：`watch('networkBusy', (busy) => {})` **无效**——第 2 参是 subscriber，不是回调。请用 `stateHandlers` 或三参数形式。
+点名前缀供前端分类着色：`JC` 白、`BD` / `GD` 黑、其它深灰。
 
-变更在微任务中批处理：同一次 tick 内多次赋值，按 key 合并后再回调。
+**`lines`（无表头）** — 每行 `起点ID,终点ID,设备ID`：
 
-### 取消 State 监听
-
-```js
-const root = engine.getRootState()
-
-root.unwatch('networkBusy', ui) // 取消某一字段
-root.unwatchAll(ui)             // 取消该 subscriber 上所有字段（dispose 常用）
+```
+JC08,GD02,324001001
+JC08,GD07,324001002
 ```
 
-### 监听 Event
+起点、终点必须出现在 `points` 中；设备 ID 必须非空，用来对齐 `data`。
 
-两种写法等价可用：
+**`data`（第一行是表头）** — 至少 3 列：`设备ID,时点,attr...`。第 3 列起的表头即物理量名（前端 `slopeAttrs`）：
 
-**1. `on` / `once`（业务侧常用）**
-
-```js
-const onBusy = ({ busy, active, byKind }) => { /* ... */ }
-const onRay = (payload) => { /* ... */ }
-
-engine.event.on('net:busy', onBusy)
-engine.event.on(EVENTS.VIEWER.RAY_CB, onRay)
-
-// 只触发一次，自动卸掉
-engine.event.once('finite:ws:connect', () => { /* ... */ })
+```
+设备ID号,目标时点,目标位移测值(mm),目标温度(°C),原始位移增量(mm)
+324001001,2026-07-01 11:00:00,169.26,23.8,-4.01
+324001002,2026-07-01 11:00:00,288.3,24.3,-2.33
 ```
 
-**2. `watch` + `eventHandlers`（模块内部常用）**
+- 设备 ID 必须能在 `lines` 里找到；对不上的行会跳过
+- 时点字符串原样作为 step（前端 `slopeSteps`）
+- 空单元格或非数字写成 NaN
+- 同一设备同一时点后写覆盖先写
 
-```js
-const mod = {
-  eventHandlers: {
-    [EVENTS.WS.CONNECT]: () => { /* WebSocket 连接成功 */ },
-    'viewer:ray:cb': (payload) => { /* ... */ },
-  },
+`config` 示例：
+
+```json
+{
+  "meshName": "xiluodu",
+  "id": "xiluodu-meas",
+  "ts": 1710000000000,
+  "url": "https://callback",
+  "dams": true
 }
-
-engine.event.watch(mod) // 把 mod.eventHandlers 全部挂上
 ```
 
-发送：`engine.event.emit(eventName, detail?)`。
+### 模式互斥规则（常见 400）
 
-### 取消 Event 监听
+| 情况 | 错误含义 |
+|------|----------|
+| zip 与 msh 同时有 | 不能混传 |
+| zip 与 res 同时有 | 不能混传 |
+| 两个 msh + res | 双 msh 不要带 res |
+| 只有一个 msh、无 res | 单 msh 必须配 res |
+| 超过两个 msh | 最多两个 |
+| zip 模式但 `config.zip` 为空 | 需要 zip 字段映射 |
+| forecast + 双 msh | 暂不支持（双 msh 只出 damb） |
+| forecast 且 `meshVersion` 缺失 / 不存在 | 校验失败 |
+| dams 无 `id` | 必填 |
+| dams 缺 `points` / `lines` / `data` | 三个文件都必须传 |
+| dams + forecast | 不能同时开 |
 
-```js
-// on 时必须保留同一函数引用，才能精确 off
-engine.event.off('net:busy', onBusy)
+### 成功响应（同步返回）
 
-// 去掉该事件上全部监听
-engine.event.off('net:busy')
+网格上传：
 
-// 通配符
-engine.event.off('net:*')
-
-// watch 注册的，用 unwatch 整对象卸掉
-engine.event.unwatch(mod)
+```json
+{
+  "message": "文件上传成功，后台正在执行自动导入",
+  "timestamp": 1710000000000
+}
 ```
 
-> 匿名函数无法取消：`on('net:busy', () => {})` 之后无法精确 `off`。请先赋给变量再 `on` / `off`。
+dams 上传：
+
+```json
+{
+  "message": "测点文件上传成功，后台正在生成 dams",
+  "timestamp": 1710000000000,
+  "mode": "dams"
+}
+```
+
+### 后台回调 `POST config.url`
+
+Content-Type: `application/json`，超时 5s。
+
+**attrstore / forecast 通用结构：**
+
+```json
+{
+  "id": "task-uuid",
+  "ts": 1710000000000,
+  "ok": true,
+  "msh": "{...mesh_version JSON string...}",
+  "res": "{...attr_import_log JSON string...}"
+}
+```
+
+失败时 `ok=false`，并带 `error` 字符串。`msh` / `res` 为 JSON **字符串**（不是嵌套对象）。
+
+**damb 写出（双 msh，或 zip 仅网格）：**
+
+```json
+{
+  "id": "task-uuid",
+  "ts": 1710000000000,
+  "ok": true,
+  "mode": "damb"
+}
+```
+
+失败时同样 `ok=false` + `error`，仍带 `"mode": "damb"`。
+
+**dams 回调：**
+
+```json
+{
+  "id": "xiluodu-meas",
+  "ts": 1710000000000,
+  "ok": true,
+  "mode": "dams",
+  "stat": {
+    "mesh_name": "xiluodu",
+    "point_count": 173,
+    "line_count": 301,
+    "attr_count": 3,
+    "attr_names": ["目标位移测值(mm)", "目标温度(°C)", "原始位移增量(mm)"],
+    "step": ["2026-07-01 11:00:00"],
+    "kind": "measuring",
+    "version": "1.0p"
+  }
+}
+```
+
+若 `url` 为空，回调会静默失败（服务端打日志），不影响已完成的导入 / 导出。
+
+### 上传注意点（速查）
+
+1. **串行**：全局一把锁，并发第二次会 `409`，请排队或等回调后再发。
+2. **异步**：HTTP 200 只表示文件已收下并开始处理，最终结果看回调 `ok`。
+3. **forecast**：只导出 damf，不写 attrstore；`meshVersion` 必须是 catalog 中已有的 baseline。
+4. **双 msh**：写出 `{meshName}.damb`，不要 res、不要 forecast；第二层 mat **+10000**。
+5. **zip**：文件名以 `config.zip` 为准，解压后按映射读取。有 `res` → attrstore；仅网格（无 res）→ damb（无 +10000）。
+6. **字段名容错**：推荐用 `msh`/`res`/`zip`/`msh2`；用 `files` 时务必保证扩展名正确。dams 推荐用 `points`/`lines`/`data`；走 `files` 时文件名须分别含 `points` / `lines` / `data`。
+7. **dams**：必须同时传 points + lines + data 三个文件；`config.id` 即下载名 `{id}.dams`。
+8. **临时目录**：同名覆盖（如 `current.msh`），不要并行上传。
 
 ---
 
-## 常用示例
+## WebSocket `GET /damviewer/ws`
 
-### 切换浇筑步 / 物理场
+前端 DataCenter 走此连接拉拓扑 / 属性。常用 `type`（大小写不敏感）：
 
-允许只改其中一部分，但 **`updateAttr` 总是需要修改**。
+| type | 说明 |
+|------|------|
+| `GET_VERTICES` / `GET_SURFACES` / `GET_FACES` / `GET_GRIDS` / `GET_EDGES` / `GET_LINES` / `GET_POINTS` | 网格拓扑（前端优先走 HTTP `verticesFile` / `topoFile`，失败才用这些） |
+| `GET_ATTR` | 物理量场 |
+| `GET_ENVELOPE` | 包络场（二进制同 `GET_ATTR`） |
+| `GET_CUT` / `GET_CUT_DAMF` | 平面切片 |
+| `GET_CELL_HIGHLIGHT` | 单元高亮几何 |
+| `GET_LAST_STEP_CELLS` | 末段：最后一挡新增体单元的局部网格 + 当前节点标量 |
+| `START_ATTR_WARM` / `CANCEL_ATTR_WARM` | 时间轴预热 |
+| `GET_STRESS_CHAIN` | 应力链（不入 cache） |
+| `HEARTBEAT` | 保活，服务端丢弃不回包 |
 
-```js
-engine.event.emit("viewer:state", {
-  viewerId: "meEnXC0yvSfZ10KxrLm-g",
-  state: {
-    targetAttr: "stress",
-    targetAttrVersion: 1767161923853,
-    targetMeshVersion: 1767161923853,
-    targetStep: 1,
-    targetAxis: 3,
-    updateAttr: Math.random(),
-  },
-})
-```
+### `GET_STRESS_CHAIN`
 
-### 边坡监测 dams / SlopeActor
+从种子顶点沿主应力（p1/p2/p3）走链，一次下发壳面 / 线 / 顶点 / 标量 / 单元中心 / 方向箭头。
 
-详见上方专节。加载 `.dams` 会自动带入默认地形；关闭 `dams` 一并卸地形。
+payload：
 
-```js
-engine.event.emit("viewer:state", {
-  viewerId: "<viewerId>",
-  state: {
-    dams: "xiluodu-meas",
-    slopeLineWidth: 3.5,
-    slopePointRadius: 0.8,
-    slopePointColorJc: "#ffffff",
-    slopePointColorBd: "#111111",
-    slopePointColorOther: "#555555",
-    slopeFocus: false, // true=显示监测模型并隐藏地形
-    targetAttr: "目标位移测值(mm)",
-    targetStep: "2026-07-01 11:00:00",
-    updateAttr: Math.random(),
-  },
-})
-// 关闭监测并卸默认地形
-engine.event.emit("viewer:state", {
-  viewerId: "<viewerId>",
-  state: { dams: "" },
-})
-```
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `mesh` | 是 | mesh 名 |
+| `meshVersion` | 是 | 浇筑版本 |
+| `version` / `attrVersion` | 是 | 物理量版本 |
+| `vertexIndex` 或 `vertexId` | 是 | 数组下标，或 GiD 节点号 |
+| `step` | 否 | 默认 `"1"` |
+| `attrName` / `name` | 否 | 默认 `"stress"`，stride 须 ≥ 9 |
+| `axis` | 否 | `p1`/`p2`/`p3` 或 `6`/`7`/`8`，默认 `p1` |
+| `maxCells` | 否 | 默认 `200` |
+| `alignCos` | 否 | 默认 `0.5` |
+| `seedPolicy` | 否 | `maxAbs`（默认）/ `nearHit` |
+| `hitPoint` | 否 | `[x,y,z]`，`nearHit` 时用 |
 
-### 地形表面 terrain / TerrainActor
+Start 元数据带 `layout`（二进制块顺序）以及 `cellIds` / `seedCell` / `axis` 等；随后 chunked binary：`faces` → `lines` → `vertices` → `vertexGlobalIndices` → `scalars` → `cellCenters` → `arrows`（每箭头 7 个 float：`cx,cy,cz,dx,dy,dz,mag`）。
 
-可单独加载，不进材料列表。加载 `dams` 时引擎会自动写成默认 id `xld`（`dvServer/terrain/xld.glb`），一般不必再填。DWG 先由 `tools/terrain-from-dwg` 去掉文字/符号块，等高线补成 TIN，写出 `.damt`。
+### `GET_LAST_STEP_CELLS`
 
-```js
-engine.event.emit("viewer:state", {
-  viewerId: "<viewerId>",
-  state: { terrain: "xld" },
-})
-// 关闭（若此时仍开着 dams，下次同步会再写回默认地形）
-engine.event.emit("viewer:state", {
-  viewerId: "<viewerId>",
-  state: { terrain: "" },
-})
-```
+返回最后一挡浇筑**新增**的体单元：该挡表面有新增面的材料，且只保留这一挡新加的 cell（已打 version 的单元要求 `Version ==` 该挡；历史顺序编号用该挡 `CellStart`..`CellEnd`，1 起、含尾）。更早的 cell 不返回。
 
-### 切换动效 switchFx
+payload：
 
-```js
-// 性能优先：关掉 drawRange / attr，保留 meshName 扫光
-engine.event.emit("root:state", {
-  switchFx: { meshName: true, drawRange: false, attr: false },
-})
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `mesh` | 是 | mesh 名 |
+| `meshVersion` | 是 | 浇筑版本，`> 0` |
+| `version` | 是 | 物理量版本，`> 0` |
+| `name` | 是 | 物理量名 |
+| `step` | 是 | 时间步字符串 |
+| `axis` | 否 | 分量下标，默认 `0` |
+| `scalarsOnly` | 否 | `true` 时只重发标量；顶点顺序与全量响应一致（按全局顶点下标升序压缩） |
 
-// 全部瞬时切换（无动效）
-engine.event.emit("root:state", { switchFx: false })
+高阶单元只保留角点（16 节点且前后重复时压成 8，六面体高阶取前 8）。物理量读不到时仍下发几何，标量填 0。
 
-// 两倍速（动效仍开，时长减半；时间轴帧间隔同步减半）
-engine.event.emit("root:state", { switchFxSpeed: 2 })
-engine.timeline('setPlaySpeed', 2)
-```
+Start 元数据：`mode`（`full` / `scalars`）、`layout`、`cellCount`、`vertexCount`、`matIds`、`lastMeshVersion`、`scalarName`、`axis`。
 
-### 网络忙状态
+随后 chunked binary，小端：
 
-```js
-const netUi = {
-  stateHandlers: {
-    networkBusy: (busy) => { /* loading overlay */ },
-  },
-}
-engine.getRootState().watch(netUi)
+- `full`：`vertices` float32 → `cellOffsets` uint32 → `cellConn` uint32 → `scalars` float32
+- `scalars`：仅 `scalars` float32
 
-const onBusy = ({ busy, active, byKind }) => {
-  // byKind.ws / byKind.damf / …
-}
-engine.event.on("net:busy", onBusy)
-
-engine.getNetStatus() // { busy, active, byKind }
-
-// 取消
-engine.getRootState().unwatchAll(netUi)
-engine.event.off("net:busy", onBusy)
-```
-
-### 包络图 envelopeMode
-
-与 `字段定义.js` 示例一致。
-
-```js
-// 开最大包络（可与 targetAttr / targetAxis / updateAttr 同一次写入）
-engine.event.emit("viewer:state", {
-  viewerId: "<viewerId>",
-  state: {
-    envelopeMode: "max", // 或 "min"；关闭: null / ""
-    targetAttr: "stress",
-    targetAxis: 0,
-    updateAttr: Date.now(),
-  },
-})
-
-// 位移包络 + 变形（dispCoef 仍写 actor）
-engine.event.emit("viewer:state", {
-  viewerId: "<viewerId>",
-  state: {
-    envelopeMode: "min",
-    targetAttr: "displacements",
-    targetAxis: 3,
-    updateAttr: Date.now(),
-  },
-})
-engine.event.emit("actor:global:state", {
-  viewerId: "<viewerId>",
-  state: { dispCoef: 50 },
-})
-```
-
-### 位移矢量箭头 arrow
-
-先加载位移，再开箭头（未传 `type` 时 normal / eph / forecast 一起开）：
-
-```js
-const viewerId = engine.getAllViewerState()[0].id
-
-engine.event.emit("viewer:state", {
-  viewerId,
-  state: {
-    targetAttr: "displacements",
-    targetAxis: 3,
-    updateAttr: Date.now(),
-  },
-})
-
-engine.event.emit("actor:global:state", {
-  viewerId,
-  state: {
-    arrow: true,
-    arrowMode: "resultant", // 或 "xyz"
-    arrowScale: 1,
-    arrowAspect: 0.45,
-    arrowStride: 4,
-  },
-})
-
-// 只开某一层：type: "normal" | "eph" | "forecast"
-// engine.event.emit("actor:global:state", {
-//   viewerId, type: "eph", state: { arrow: true, arrowStride: 2 },
-// })
-```
-
-### 应力链 stressChainMode
-
-先切到应力场，再开模式；**Ctrl+左键**点选生成链：
-
-```js
-const viewerId = engine.getAllViewerState()[0].id
-
-engine.event.emit("viewer:state", {
-  viewerId,
-  state: {
-    targetAttr: "stress",
-    targetAxis: 6, // 云图轴；链用 stressChainAxis
-    updateAttr: Date.now(),
-    stressChainMode: true,
-    stressChainAxis: 6, // p1；7=p2，8=p3
-    stressChainSeedPolicy: "nearHit", // 或 "maxAbs"
-    stressChainShowArrows: true,
-    stressChainMaxCells: 200,
-  },
-})
-
-// 关闭（清链，恢复原先 rayMode）
-engine.event.emit("viewer:state", {
-  viewerId,
-  state: { stressChainMode: false, stressChainSeed: null },
-})
-
-// 不拾取、直接指定种子
-engine.event.emit("viewer:state", {
-  viewerId,
-  state: { stressChainSeed: { vertexIndex: 1234, axis: 6 } },
-})
-```
-
-### 双 msh dualMeshName
-
-```js
-// 进入 dual（若与当前 meshName 不同会同步切换）
-engine.event.emit("viewer:state", {
-  viewerId: "<viewerId>",
-  state: { dualMeshName: "pre_jingling" },
-})
-
-// 关闭 dual：保持 meshName，按 normal 重载
-engine.event.emit("viewer:state", {
-  viewerId: "<viewerId>",
-  state: { dualMeshName: null },
-})
-
-// 读写 dual Actor
-engine.getAllActorState(viewerId, "dualMesh")
-engine.event.emit("actor:state", {
-  viewerId,
-  matId: "1",
-  type: "dualMesh",
-  state: { show: false },
-})
-```
-
-### 时间轴播放 timeline
-
-```js
-// 装载 → 预热 → 播放（详见上方「时间轴播放」专节）
-engine.timeline('configure', {
-  logs: attrCatalog.logs,
-  startAttrVersion: startVer,
-  endAttrVersion: endVer,
-  attrName: 'temperature',
-  intervalMs: 400,
-  playSpeed: 2,
-  onChange: (st) => console.log(st.playhead, st.bufferRatio, st.playSpeed),
-})
-engine.timeline('start')
-engine.timeline('play')
-
-engine.timeline('setPlaySpeed', 4)
-engine.timeline('seek', 2)
-engine.timeline('switchAttr', { attrName: 'stress' })
-engine.timeline('stop')
-```
-
-### 增量预演 damfScenario
-
-```js
-// 开启（关闭：damfScenario: ""）
-engine.event.emit("viewer:global:state", {
-  state: { damfScenario: "your-scenario-id" },
-})
-
-// damf 模式下切换物理场：不需 targetAttrVersion
-engine.event.emit("viewer:state", {
-  viewerId: "<viewerId>",
-  state: {
-    targetAttr: "stress",
-    targetStep: "1",
-    targetAxis: 0,
-    updateAttr: Date.now(),
-  },
-})
-
-// 体拾取 / 切面拾取
-engine.event.emit("viewer:global:state", { state: { rayMode: "mesh" } })
-engine.event.emit("viewer:global:state", { state: { rayMode: "cut" } })
-
-// 切片（damfScenario 开启时内部 GET_CUT_DAMF）
-engine.event.emit("viewer:global:state", { state: { cut: Math.random() } })
-```
-
-### Actor 控制
-
-```js
-// 全部 actor → 点模式
-engine.event.emit("actor:global:state", {
-  viewerId: "axajqrpCGTVvRmILdCtrn",
-  state: { displayMode: "point" },
-})
-
-// 关闭网格
-engine.event.emit("actor:global:state", {
-  viewerId: "r9MaKsZX2QrLq2rpMj7R0",
-  state: { grid: false },
-})
-
-// 法线材料
-engine.event.emit("actor:global:state", {
-  viewerId: engine.getAllViewerState()[0].id,
-  state: { matStyle: "normal" },
-})
-
-// 单个 actor 隐藏
-engine.event.emit("actor:state", {
-  viewerId: "r9MaKsZX2QrLq2rpMj7R0",
-  matId: "1",
-  state: { show: false },
-})
-
-// 开启色阶，分两段
-engine.event.emit("actor:global:state", {
-  viewerId: "WFn2yEpDthoY8U67znzTu",
-  state: { usecolorStep: true, colorStepNum: 2 },
-})
-```
-
-### 全坝段线框显隐
-
-```js
-// 单个 viewer
-engine.event.emit("viewer:state", {
-  viewerId: "<viewerId>",
-  state: { allMeshShow: false },
-})
-
-// 全部 viewer
-engine.event.emit("viewer:global:state", {
-  state: { allMeshShow: true },
-})
-
-// 指定若干 viewer
-engine.event.emit("viewer:global:state", {
-  id: ["<viewerId1>", "<viewerId2>"],
-  state: { allMeshShow: false },
-})
-```
-
----
-
-## 默认配置
-
-```js
-const defaultConfig = {
-  container: [],
-  axes: { size: "8rem", type: "blender" },
-  renderer: {},
-  wsUrl: "ws://sky.leve.vip:8888/jl_ws/",
-  server: "http://sky.leve.vip:3000/",
-  meshName: "test3",
-  switchFxSpeed: 1,
-  camPos: { x: 315.63, y: 284.78, z: 247.46 },
-  camTarget: { x: 40.15, y: -3.32, z: 124.10 },
-}
-```
-
----
-
-*字段与事件定义见 [`字段定义.js`](./字段定义.js)。*
+`cellOffsets` 长度为单元数 + 1，`cellConn` 是压缩后的局部顶点下标。切片和补面由前端完成，本接口不切平面。

@@ -4,12 +4,19 @@
 
 ## ChangeLog
 
+### 2026-10-20
+
+- 新增 VIEWER 字段 `showOrbitCenter`（默认 `false`）：在相机 Orbit 旋转中心显示标记
+- 显示为略大的白色线框方块，中间一颗琥珀色实心球；单独 pass 绘制，不参与深度测试与深度写入
+- 尺寸按屏幕固定（约 18 像素），位置跟随 Orbit target
+- `viewer:camera:view` 增加 `includeAllMesh`（默认 `true`）：`false` 时全坝段线框 `allMesh` 不参与这次默认视角 / 轴向视角的外包围盒。内部自动 fit 仍计入 `allMesh`
+
 ### 2026-10-17
 
 - 新增 VIEWER 字段 `lastStepSections`：对象打开末段，只显示最后一挡新增体单元；`null` / `false` 关闭
 - 请求只读该对象，不改全局 `meshName` / `targetAttr`，不走全模型链路。走 WS `GET_LAST_STEP_CELLS`
 - 打开后隐藏普通 actor、自动打开剖切并藏手柄；切片在前端从原体单元生成保留侧表皮和补面，不走 `clippingPlanes` / `GET_CUT`
-- 等值线走 shader（`isoLineNum` / `isoLineWidth`），不标数字；色阶跟 `usecolorStep` / `colorStepNum`；标量写入 `numArr`，未锁定范围时同时写 `min` / `max`
+- 等值线走 shader（条数跟 `isoLineNum`，线宽为 `isoLineWidth` 的 0.4 倍，默认实际 `0.6`），不标数字；色阶跟 `usecolorStep` / `colorStepNum`；标量写入 `numArr`，未锁定范围时同时写 `min` / `max`
 
 ### 2026-09-21
 
@@ -101,6 +108,7 @@
 
 - [DamViewer Stream — State \& Event API](#damviewer-stream--state--event-api)
   - [ChangeLog](#changelog)
+    - [2026-10-20](#2026-10-20)
     - [2026-10-17](#2026-10-17)
     - [2026-09-21](#2026-09-21)
     - [2026-09-14](#2026-09-14)
@@ -233,6 +241,7 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 | `CAMERA_LOOKAT` | `cameraLookat` | 相机注视点 |
 | `CAMERA_LOOK_AT_FIT_RATIO` | `cameraLookAtFitRatio` | 相机视角与模型距离倍率，默认 `0.6` |
 | `AUTO_ROTATE` | `autoRotate` | 自动旋转 |
+| `SHOW_ORBIT_CENTER` | `showOrbitCenter` | 相机旋转中心显隐，默认 `false`。`true` 时在 Orbit target 画线框方块 + 实心球，不参与深度 |
 | `RAY_MODE` | `rayMode` | `null\|""` 关闭；`"mesh"` 体拾取；`"cut"` 切面拾取；`"measuring"` 测点拾取 |
 | `AXIS_STYLE` | `axisStyle` | 坐标轴样式：`gid` / `blender` |
 | `AXIS_POSITION` | `axisPosition` | `left-top` / `right-top` / `left-bottom`（默认右下角） |
@@ -432,7 +441,7 @@ engine.event.emit("actor:global:state", { viewers: ['', ''], state: { grid: fals
 - 切片在前端从原体单元生成：保留侧外表皮 + 切口补面（六面体补面用 8 个角点的三线性插值）。不使用材质 `clippingPlanes`，也不走全坝 `GET_CUT`
 - 剖切激活时把数据 Y（场景里朝向摄像机的那一侧）翻到被切掉的一边，平面仍过包围盒中心，只在激活时做一次
 - 被切掉一侧的线框为白色（透明度 `0.1`），看得见的一侧为黑色浅线；未剖切时不画这两套线
-- 色阶跟 actor 的 `usecolorStep` / `colorStepNum`；等值线跟 `isoLineNum` / `isoLineWidth`（shader 画线，**不标数字**）
+- 色阶跟 actor 的 `usecolorStep` / `colorStepNum`；等值线条数跟 `isoLineNum`。线宽用 `isoLineWidth` 的 0.4 倍（全局默认 `1.5`，末段实际 `0.6`）。shader 画线，不标数字
 - 标量范围写入 `state.numArr`（10 档）。`lockRange` 未锁定时同时写 `state.min` / `state.max`
 - 请求失败或空数据不会把 `lastStepSections` 清掉，也不会藏掉原来的坝体。切口切空时退回完整表皮
 
@@ -838,7 +847,7 @@ const st = engine.timeline('status')
 |------|--------|------|
 | `RESIZE` | `viewer:resize` | 重新计算 canvas 尺寸 |
 | `ID` | `viewer:id` | Viewer ID 相关 |
-| `CAMERAVIEWE` | `viewer:camera:view` | 外部发送：切换 camera 位置（与内部自动 fit 分离） |
+| `CAMERAVIEWE` | `viewer:camera:view` | 外部发送：默认视角（无 `axis`）或轴向视角。`includeAllMesh` 默认 `true`；`false` 时 `allMesh` 不参与外包围盒。与内部自动 fit 分离 |
 | `CAMERA_VIEW_DONE` | `viewer:camera:view:done` | 内部视角处理结束，外部可改相机；payload: `{ id, source }` |
 | `CAMERASET` | `viewer:camera:set` | 设置相机 |
 | `STATE` | `viewer:state` | 修改单个 viewer state |
@@ -854,6 +863,13 @@ const st = engine.timeline('status')
 | `INITDONE` | `viewer:init:done` | 初始化完成，可 `setMeshName` |
 | `ALL_MESH_DONE` | `viewer:allmesh:done` | 全坝段线框 `allMesh` 加载完成 |
 | `CLIP_POS_CB` | `viewer:clipPos:cb` | 订阅：剖切平面坐标位置回调 |
+
+默认视角（无 `axis`）按当前可见主几何的外包围盒取景。`includeAllMesh` 不传或为 `true` 时，全坝段线框计入包围盒；`false` 时只按当前模型取景。轴向视角同样吃这个参数。内部自动 fit 不读它，仍计入 `allMesh`。
+
+```js
+engine.event.emit('viewer:camera:view', { id, includeAllMesh: false })
+engine.event.emit('viewer:camera:view', { id, axis: 'x', includeAllMesh: false })
+```
 
 ### ACTOR
 
